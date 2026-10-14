@@ -121,20 +121,42 @@ function applyEdits(payload: Payload): string[] {
   }
 
   if (payload.flag_key === "promo_banner_2025") {
+    // delete_gated_branch: promo was at 0% / target false → drop banner + callout
     const listing = path.join(root, "apps/web/src/pages/Listing.tsx");
     writeFileSync(
       listing,
-      `export function ListingPage() {
+      `const PRODUCTS = [
+  { name: "Classic Tee", price: "$28", code: "TEE-01" },
+  { name: "Canvas Tote", price: "$42", code: "TOT-02" },
+  { name: "Wool Cap", price: "$36", code: "CAP-03" },
+  { name: "Field Jacket", price: "$168", code: "JKT-04" },
+  { name: "Trail Bottle", price: "$24", code: "BTL-05" },
+  { name: "Desk Lamp", price: "$88", code: "LMP-06" },
+];
+
+export function ListingPage() {
   return (
     <div>
-      <h1>Products</h1>
-      <div className="card">
-        <h2>Classic Tee</h2>
-        <p>$28</p>
+      <div className="page-head">
+        <div>
+          <h1>Products</h1>
+          <p>Catalog surface used to exercise abandoned promo traffic.</p>
+        </div>
       </div>
-      <div className="card">
-        <h2>Canvas Tote</h2>
-        <p>$42</p>
+
+      <div className="grid" style={{ marginTop: "1rem" }}>
+        {PRODUCTS.map((p) => (
+          <article className="product" key={p.code}>
+            <div className="product-visual">{p.code}</div>
+            <div className="product-body">
+              <h2>{p.name}</h2>
+              <div className="price">{p.price}</div>
+              <button type="button" className="btn secondary">
+                Add to cart
+              </button>
+            </div>
+          </article>
+        ))}
       </div>
     </div>
   );
@@ -145,12 +167,21 @@ function applyEdits(payload: Payload): string[] {
   }
 
   if (payload.flag_key === "one_click_buy") {
+    // keep_gated_branch: target true → keep one-click CTA, drop flag plumbing
     const checkout = path.join(root, "apps/web/src/pages/Checkout.tsx");
     let src = readFileSync(checkout, "utf8");
     src = src.replace(/\s*const oneClick = useFlag\("one_click_buy"\);\n/, "\n");
     src = src.replace(
-      /\{oneClick\.enabled \? \(\s*<button type="button">One-click buy<\/button>\s*\) : \(\s*<button type="button">Continue to payment<\/button>\s*\)\}/,
-      `<button type="button">One-click buy</button>`,
+      /\s*\{oneClick\.enabled \? \(\s*<button type="button" className="btn">\s*One-click buy\s*<\/button>\s*\) : \(\s*<button type="button" className="btn secondary">\s*Continue to payment\s*<\/button>\s*\)\}\s*/,
+      `
+              <button type="button" className="btn">
+                One-click buy
+              </button>
+`,
+    );
+    src = src.replace(
+      /\s*<FlagCallout\s*\n\s*flagKey="one_click_buy"\s*\n\s*enabled=\{oneClick\.enabled\}\s*\n\s*variation=\{oneClick\.variation\}\s*\n\s*outcome=\{oneClick\.outcome\}\s*\n\s*blockedBy=\{oneClick\.blockedBy\}\s*\n\s*\/>\s*/,
+      "\n",
     );
     writeFileSync(checkout, src);
     changed.push(checkout);
@@ -230,6 +261,30 @@ async function main(): Promise<void> {
     return;
   }
 
+  const demoBranch = process.env.DEMO_BRANCH ?? "demo";
+  const workBranch = `agent/remove-${payload.flag_key}`;
+  const restore = (): void => {
+    run("git", ["reset", "--hard", "HEAD"]);
+    run("git", ["checkout", "main"]);
+    run("git", ["clean", "-fd", "featurevisor/datafiles"]);
+  };
+
+  // Fresh branch from demo so each PR is isolated
+  if (process.env.GITHUB_TOKEN) {
+    if (!run("git", ["fetch", "origin", demoBranch])) {
+      throw new Error(`git fetch origin ${demoBranch} failed`);
+    }
+    if (!run("git", ["checkout", demoBranch])) {
+      throw new Error(`git checkout ${demoBranch} failed`);
+    }
+    if (!run("git", ["reset", "--hard", `origin/${demoBranch}`])) {
+      throw new Error(`git reset --hard origin/${demoBranch} failed`);
+    }
+    if (!run("git", ["checkout", "-B", workBranch])) {
+      throw new Error(`git checkout -B ${workBranch} failed`);
+    }
+  }
+
   const changed = applyEdits(payload);
   const leftover = flagStillReferenced(payload.flag_key);
   if (leftover) {
@@ -245,6 +300,7 @@ async function main(): Promise<void> {
         pr_url: "",
       },
     ]);
+    restore();
     process.exit(1);
   }
 
@@ -267,6 +323,7 @@ async function main(): Promise<void> {
         pr_url: "",
       },
     ]);
+    restore();
     process.exit(1);
   }
 
@@ -277,33 +334,50 @@ async function main(): Promise<void> {
 
   let prUrl = `file://.local-data/pr-${payload.flag_key}.md`;
   if (process.env.GITHUB_TOKEN) {
-    const branch = `agent/remove-${payload.flag_key}`;
-    const demoBranch = process.env.DEMO_BRANCH ?? "demo";
-    run("git", ["checkout", "-B", branch]);
     run("git", ["add", "apps", "featurevisor"]);
-    run("git", [
-      "commit",
-      "-m",
-      `remove flag ${payload.flag_key} (${payload.collapse_direction})`,
-    ]);
-    run("git", ["push", "-u", "origin", branch]);
+    if (
+      !run("git", [
+        "commit",
+        "-m",
+        `remove flag ${payload.flag_key} (${payload.collapse_direction})`,
+      ])
+    ) {
+      restore();
+      throw new Error("git commit failed");
+    }
+    if (!run("git", ["push", "-u", "origin", workBranch, "--force"])) {
+      restore();
+      throw new Error("git push failed");
+    }
+    const prEnv = {
+      ...process.env,
+      GH_TOKEN: process.env.GITHUB_TOKEN,
+    };
     const pr = spawnSync(
       "gh",
       [
         "pr",
         "create",
+        "--repo",
+        process.env.GITHUB_REPO ?? "lucamezzalira/stale-flag-cleanup",
         "--base",
         demoBranch,
         "--head",
-        branch,
+        workBranch,
         "--title",
         `Remove feature flag ${payload.flag_key}`,
         "--body",
         body,
       ],
-      { cwd: root, encoding: "utf8", env: process.env },
+      { cwd: root, encoding: "utf8", env: prEnv },
     );
+    if (pr.status !== 0) {
+      console.error(pr.stderr || pr.stdout);
+      restore();
+      throw new Error("gh pr create failed");
+    }
     prUrl = (pr.stdout || "").trim() || prUrl;
+    run("git", ["checkout", "main"]);
   } else {
     console.log(`No GITHUB_TOKEN — wrote ${localPr}`);
   }
