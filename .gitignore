@@ -13,6 +13,8 @@ coverage/
 .tinybird/
 .tbwork/
 .tinyb
+*.local.md
+docs/article-handoff.local.md
 infra/cdk.out/
 infra/cdk-outputs.json
 infra/dist/

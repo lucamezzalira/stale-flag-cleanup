@@ -1,6 +1,6 @@
 # Infra (AWS CDK, us-east-1)
 
-Aligns with Tinybird `api.us-east.aws.tinybird.co`.
+Aligns with Tinybird `api.us-east.aws.tinybird.co`. Logical + AWS Mermaid diagrams and the nightly sequence live in the root [`README.md`](../README.md).
 
 ## What this stack deploys
 

@@ -1,26 +1,33 @@
 # Stale feature flag cleanup (PoC)
 
-Background agent removes stale [Featurevisor](https://featurevisor.com) flags only after [Tinybird](https://www.tinybird.co)-shaped evidence says it is safe. Verdicts are computed by ordered rules (SQL endpoints in `tinybird/`, TypeScript mirror in `packages/verdicts` for local runs). The agent executes them. Refusals are the point of the demo.
+Background agent removes stale [Featurevisor](https://featurevisor.com) flags only after [Tinybird](https://www.tinybird.co) evidence says it is safe. Verdicts are ordered rules (SQL pipes in `tinybird/`, TypeScript mirror in `packages/verdicts`). Scout schedules. Surgeon collapses code and opens PRs into `demo`. Refusals are intentional.
 
-All telemetry in this repository is **synthetic**. The generator is in `tools/generator`.
+All telemetry in this repository is **synthetic** (`tools/generator`).
 
-## Architecture
+Live demo (us-east-1):
+
+| Surface | URL |
+|---|---|
+| Shop | https://dj37uarwx2jpn.cloudfront.net |
+| Datafile | https://d1jcup3snfgsrs.cloudfront.net/featurevisor/production/featurevisor-all.json |
+
+## Architecture (logical)
 
 ```mermaid
 flowchart TB
   subgraph runtime [Runtime signals]
     FV[Featurevisor YAML + datafile]
     WEB[apps/web + packages/flag-client]
-    CDN[Datafile CDN / local serve]
+    CDN[Datafile CDN]
     FV -->|build datafile| CDN
     CDN -->|datafileUrl| WEB
-    WEB -->|flag_evaluations + session_beacons| TB
+    WEB -->|evaluations + beacons| TB
   end
 
   subgraph evidence [Evidence layer]
     GEN[tools/generator seed]
     DEFS[tools/publish-defs]
-    TB[(Tinybird<br/>datasources + pipes)]
+    TB[(Tinybird datasources + pipes)]
     LOCAL[.local-data + packages/verdicts]
     GEN -->|synthetic history| TB
     GEN -->|same rows| LOCAL
@@ -39,16 +46,14 @@ flowchart TB
   end
 
   subgraph agent [Background agent]
-    SCOUT[scout]
-    SURG[surgeon]
-    OLLAMA[Ollama optional PR prose]
+    SCOUT[scout Tinybird MCP/REST]
+    SURG[surgeon Bedrock Converse]
     GH[GitHub PR into demo]
     LOG[cleanup_decision_log]
     CAND --> SCOUT
     SAFE --> SCOUT
     SCOUT -->|verdict + reason| LOG
     SCOUT -->|safe_to_remove only| SURG
-    SURG --> OLLAMA
     SURG -->|collapse YAML + app code| GH
     SURG --> LOG
   end
@@ -56,80 +61,186 @@ flowchart TB
   subgraph humans [Human surfaces]
     CLI[tools/report]
     MCP[Tinybird MCP]
+    QA[docs/qa-agent.md + Cursor canvas]
     RPT --> CLI
     RPT --> MCP
     SAFE --> MCP
+    GH --> QA
   end
+```
+
+## Architecture (AWS us-east-1)
+
+```mermaid
+flowchart LR
+  subgraph github [GitHub]
+    DEMO[demo branch]
+    PR[agent/remove-* PRs]
+    GHA[publish-flags.yml OIDC]
+  end
+
+  subgraph aws [AWS us-east-1]
+    SCH[EventBridge Scheduler<br/>midnight UTC]
+    CB[CodeBuild stale-flags-agent]
+    SM[Secrets Manager<br/>stale-flags/agent]
+    BR[Bedrock Converse<br/>Sonnet 4.5]
+    S3W[S3 web bucket]
+    S3D[S3 datafile bucket]
+    CFW[CloudFront shop]
+    CFD[CloudFront datafiles<br/>60s TTL]
+    ROLE[IAM stale-flags-gha-publish]
+  end
+
+  subgraph tb [Tinybird Cloud]
+    PIPES[flag_candidates<br/>flag_safety_check<br/>cleanup_report]
+    EV[Events API + decision log]
+  end
+
+  SCH -->|StartBuild| CB
+  SM --> CB
+  CB -->|clone demo| DEMO
+  CB -->|call_endpoint / REST| PIPES
+  CB -->|Converse| BR
+  CB -->|gh pr create| PR
+  CB -->|appendDecisions| EV
+  PR -->|human merge| DEMO
+  DEMO --> GHA
+  GHA -->|assume| ROLE
+  ROLE --> S3W
+  ROLE --> S3D
+  S3W --> CFW
+  S3D --> CFD
+  CFW -->|SPA| USER[Browser]
+  CFD -->|datafileUrl| USER
+```
+
+CodeBuild is the agent host (git, pnpm, ripgrep, Bedrock). It is not a zip Lambda.
+
+## Sequence: nightly / on-demand cleanup
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Sch as EventBridge / pnpm infra:agent-run
+  participant CB as CodeBuild
+  participant TB as Tinybird pipes
+  participant Scout as scout
+  participant Bedrock as Bedrock Sonnet 4.5
+  participant Surg as surgeon
+  participant GH as GitHub demo
+  participant GHA as publish-flags
+  participant CDN as CloudFront
+
+  Sch->>CB: StartBuild
+  CB->>CB: clone demo, pnpm install, build workspace pkgs
+  CB->>Scout: pnpm agent:run SCOUT_SOURCE=tinybird
+  Scout->>TB: flag_candidates + cleanup_report / flag_safety_check
+  TB-->>Scout: verdicts + collapse_direction
+  Scout->>TB: append cleanup_decision_log
+  loop each safe_to_remove
+    Scout->>Surg: dispatch --payload
+    Surg->>Bedrock: Converse edit loop (heuristic fallback)
+    Bedrock-->>Surg: file contents
+    Surg->>Surg: gates tsc vite featurevisor rg allowlist
+    Surg->>GH: commit + PR into demo
+    Surg->>TB: append decision with pr_url
+  end
+  Note over GH: Human merges PRs (agent never merges)
+  GH->>GHA: push to demo
+  GHA->>CDN: sync datafile + web + invalidate
+  Note over CDN: Listing loses promo UI;<br/>Checkout keeps One-click buy CTA
 ```
 
 ### How data moves
 
-1. **Featurevisor** holds flag definitions (`featurevisor/features/*.yml`), including `deprecated` / `archived` and parent/child links. A built **datafile** is served remotely (S3/CloudFront in prod, `pnpm datafile:serve` locally).
-2. **`apps/web` + `flag-client`** evaluate flags from that datafile and emit evaluation events and session beacons (with `build_id`). In this PoC, telemetry is mostly **synthetic** from the generator; the web app proves the client path.
-3. **`publish-defs`** snapshots Featurevisor YAML into `flag_definitions` (rollout %, target value, lifecycle flags). That is what the agent uses for collapse direction. It must not guess from code.
-4. **`tools/generator`** seeds ~90 days of `flag_daily_activity` and `build_adoption` so all eight demo verdicts reproduce. Same rules apply locally via `.local-data` and `packages/verdicts`.
-5. **Tinybird** stores the joined evidence and exposes only three pipes as APIs: candidates, safety check, cleanup report. The agent is not given raw warehouse access.
-6. **Scout** reads those answers (or the local verdict mirror), writes every decision to `cleanup_decision_log`, and only dispatches **surgeon** for `safe_to_remove`.
-7. **Surgeon** collapses Featurevisor YAML and app call sites deterministically, optionally asks Ollama for PR prose, runs validation/security checks, and opens a PR against **`demo`** only (never `main`).
-8. **Humans** use `pnpm report`, the Tinybird UI, or MCP (`cleanup_report` / `flag_safety_check`) to inspect the same verdicts the agent executes.
+1. **Featurevisor** holds flag definitions (`featurevisor/features/*.yml`), including `deprecated` / `archived` and parent/child links. Built **datafiles** ship to S3/CloudFront (`pnpm infra:sync` or `publish-flags.yml`).
+2. **`apps/web` + `flag-client`** evaluate flags from that datafile. In this PoC, history is mostly **synthetic** from the generator; the shop proves the client path and post-cleanup UI.
+3. **`publish-defs`** snapshots YAML into `flag_definitions` (rollout %, `target_value`, lifecycle). Collapse direction comes from definitions, not from guessing in code.
+4. **`tools/generator`** seeds ~90 days of activity so all eight demo verdicts reproduce.
+5. **Tinybird** exposes three pipes: `flag_candidates`, `flag_safety_check`, `cleanup_report`. Scout prefers Tinybird MCP `call_endpoint`, with REST fallback.
+6. **Scout** logs every decision to `cleanup_decision_log` and only dispatches **surgeon** for `safe_to_remove`.
+7. **Surgeon** asks **Bedrock Converse** (Sonnet 4.5) to edit app call sites, with a deterministic heuristic fallback. It deletes Featurevisor YAML, runs gates (tsc, vite, featurevisor lint/test, leftover `rg`, path allowlist), then opens a PR against **`demo` only**.
+8. **Humans** merge. Publish syncs CDN. QA playbook: `docs/qa-agent.md` (Cursor canvas per run).
+
+### What changed vs the first PoC sketch
+
+| Area | Before | Now |
+|---|---|---|
+| Scout evidence | Local `.local-data` / TS verdicts | Tinybird MCP + REST pipes (TS mirror kept for offline) |
+| Surgeon edits | Hardcoded Listing/Checkout paths | Bedrock Converse loop + heuristic fallback |
+| Surgeon PR prose | Ollama optional | Fallback PR body from payload (Ollama still optional locally) |
+| Agent host | “AgentCore later” notes | CDK CodeBuild + EventBridge Scheduler + Secrets Manager |
+| Model | n/a | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
+| Publish path | Manual sync | `.github/workflows/publish-flags.yml` (OIDC) + `pnpm infra:sync` fallback |
+| Decision log | Local NDJSON | Tinybird `cleanup_decision_log` (truncate on seed/reset) |
+| QA | Ad hoc | `docs/qa-agent.md` + Cursor canvas reports |
+
+Refusals (`blocked`, `inconclusive`) stay. Only `promo_banner_2025` (`delete_gated_branch`) and `one_click_buy` (`keep_gated_branch`) become PRs.
 
 ### Parts in this repo
 
 | Part | Role |
 |---|---|
-| `featurevisor/` | Source of truth for flag keys, rollout, parents, `deprecated` / `archived` |
-| `packages/flag-client` | Featurevisor SDK wrapper, event batching, `datafileUrl` load |
-| `apps/web` | Northline demo shop that evaluates flags and shows callouts |
-| `tools/publish-datafile` | Build/serve/publish the datafile (local CDN stand-in or S3) |
-| `tools/publish-defs` | Push definition snapshots into Tinybird / print NDJSON |
-| `tools/generator` | Synthetic seed + trickle traffic for the eight-flag matrix |
-| `tinybird/` | Datasources, MV, and `flag_candidates` / `flag_safety_check` / `cleanup_report` |
-| `packages/verdicts` | TypeScript mirror of the safety rules for offline `pnpm report` / agent |
-| `packages/local-store` | `.local-data` NDJSON + optional Tinybird Events ingest |
-| `packages/defs-utils` | Shared `target_value` / collapse direction helpers |
-| `tools/report` | CLI table of verdicts from local store |
-| `agent/scout` | Deterministic scheduler: candidates → verdict → log → dispatch |
-| `agent/surgeon` | Code + YAML collapse, optional Ollama text, PR to `demo` |
-| `tools/reset` | Reset `demo` to `demo-clean`, reseed, republish |
-| `infra/` | Notes for later AWS / AgentCore hosting |
-| `docs/` | Capture checklist and sample artefacts for the article |
-
-Refusals (`blocked`, `inconclusive`) are intentional demo outcomes. Only `promo_banner_2025` (delete gated branch) and `one_click_buy` (keep gated branch) should become PRs.
+| `featurevisor/` | Flag keys, rollout, parents, `deprecated` / `archived` |
+| `packages/flag-client` | Featurevisor SDK wrapper, event batching, `datafileUrl` |
+| `apps/web` | Northline demo shop |
+| `tools/publish-datafile` | Build / publish datafile |
+| `tools/publish-defs` | Definition snapshots → Tinybird |
+| `tools/generator` | Synthetic seed + trickle |
+| `tinybird/` | Datasources + the three pipes |
+| `packages/verdicts` | TS mirror of safety rules + unit tests |
+| `packages/local-store` | `.local-data` NDJSON + Tinybird truncate/append helpers |
+| `agent/scout` | Tinybird-backed scheduler → surgeon dispatch |
+| `agent/surgeon` | Bedrock (or heuristic) collapse + gates + PR |
+| `tools/reset` | Reset `demo`, truncate Tinybird, reseed |
+| `infra/` | CDK stack (web, datafiles, CodeBuild, scheduler, OIDC role) |
+| `.github/workflows/publish-flags.yml` | Push to `main`/`demo` → S3 + CloudFront |
+| `docs/qa-agent.md` | Manual QA agent playbook |
 
 ## Prerequisites
 
 - Node.js >= 24, pnpm 10+
-- Optional: Tinybird token (cloud ingest), AWS (datafile CDN), GitHub token (real PRs)
-- Optional for surgeon PR text: [Ollama](https://ollama.com) with `qwen3:8b` (or set `OLLAMA_MODEL`). Set `OLLAMA_DISABLED=1` to skip.
+- Tinybird tokens for cloud path; AWS us-east-1 for CDN + CodeBuild + Bedrock
+- GitHub token with PR scope (Secrets Manager via `pnpm infra:secrets`)
+- Bedrock model access for Sonnet 4.5 Converse in us-east-1
 
-Copy `.env.example` to `.env` and adjust.
+Copy `.env.example` to `.env` and adjust. Infra details: [`infra/README.md`](infra/README.md).
 
-## Quickstart (clone → see a refusal)
+## Quickstart (local)
 
 ```bash
 pnpm install
 pnpm datafile:build
-pnpm datafile:serve   # terminal 1 — CDN stand-in
-pnpm seed             # terminal 2 — 90-day synthetic history → .local-data/
-pnpm publish-defs     # prints or posts flag_definitions
-pnpm report           # table of eight flags + verdicts
-pnpm agent:scout -- --dry-run
+pnpm datafile:serve   # terminal 1
+pnpm seed             # terminal 2 — 90-day synthetic history
+pnpm publish-defs
+pnpm report
+SCOUT_SOURCE=tinybird pnpm agent:scout -- --dry-run
 ```
 
-You should see `promo_banner_2025` and `one_click_buy` as `safe_to_remove` (Featurevisor `deprecated: true`), and refusals for `checkout_redesign`, `shipping_estimator`, `wishlist`, wishlist children, and `search_ranking_v2`.
-
-Run the web app (with datafile server up):
+You should see `promo_banner_2025` and `one_click_buy` as `safe_to_remove`, and refusals for the other six.
 
 ```bash
 export VITE_DATAFILE_URL=http://127.0.0.1:4099/production/featurevisor-all.json
 pnpm dev
 ```
 
+## AWS demo loop
+
+```bash
+pnpm infra:deploy
+pnpm infra:secrets
+pnpm infra:sync
+pnpm infra:agent-run          # CodeBuild; capture build id
+# Follow docs/qa-agent.md → canvas report → merge PRs into demo
+# If publish-flags GHA is not wired, run: pnpm infra:sync
+```
+
+Set GitHub secret `AWS_GHA_PUBLISH_ROLE_ARN` to stack output `GitHubPublishRoleArn` for automated publish after merge.
+
 ## MCP (Tinybird)
 
-When the Tinybird project is deployed, scope a token to the three endpoints only and add the Tinybird MCP server in your editor. Ask which flags are queued tonight; answers should come from `cleanup_report` / `flag_safety_check` with sentence `reason` fields.
-
-Local demos use `pnpm report` against `.local-data` (same verdict rules).
+Scope a token to the three endpoints and add Tinybird MCP in the editor. Scout in CodeBuild uses the same `call_endpoint` path when `TINYBIRD_TOKEN` is present.
 
 ## Environment variables
 
@@ -138,17 +249,21 @@ See `.env.example`. Important ones:
 | Var | Purpose |
 |---|---|
 | `VITE_DATAFILE_URL` | Remote Featurevisor datafile URL |
-| `TINYBIRD_*` | Optional cloud ingest / API |
-| `OLLAMA_HOST` / `OLLAMA_MODEL` | Surgeon PR body generation |
-| `GITHUB_TOKEN` / `DEMO_BRANCH` | Real PRs against `demo` |
+| `TINYBIRD_*` | Cloud ingest / pipe API / MCP |
+| `SCOUT_SOURCE` | `tinybird` / `mcp` for cloud scout |
+| `BEDROCK_MODEL_ID` | Default Sonnet 4.5 inference profile |
+| `BEDROCK_DISABLED` | `1` forces heuristic surgeon edits |
+| `GITHUB_TOKEN` / `DEMO_BRANCH` | PRs against `demo` |
+| `OLLAMA_*` | Optional local PR prose |
 
 ## Agent commands
 
 ```bash
-pnpm agent:scout -- --dry-run
-pnpm agent:run          # writes cleanup_decision_log + dispatches surgeons
+SCOUT_SOURCE=tinybird pnpm agent:scout -- --dry-run
+pnpm agent:run
 pnpm agent:surgeon -- --flag=promo_banner_2025 --dry-run
-pnpm demo:reset         # reset demo branch tag + republish + reseed
+pnpm demo:reset
+pnpm infra:agent-run
 ```
 
 ## Repo layout
@@ -156,12 +271,13 @@ pnpm demo:reset         # reset demo branch tag + republish + reseed
 ```
 apps/web                 React + Vite demo shop
 packages/flag-client     Featurevisor wrapper + event emission
-packages/verdicts        Safety-check rules (local mirror of Tinybird intent)
-packages/defs-utils      target_value / collapse_direction derivation
-featurevisor             Flag YAML (promo + one_click are deprecated)
+packages/verdicts        Safety-check rules (+ tests)
+packages/local-store     Local NDJSON + Tinybird helpers
+featurevisor             Flag YAML
 tinybird                 Datasources + pipes
-tools/*                  seed, report, publish-defs, publish-datafile, reset
+tools/*                  seed, report, publish-*, reset
 agent/scout|surgeon      Background agent
-infra                    AWS notes (AgentCore later)
-docs/capture-checklist.md
+infra                    AWS CDK (us-east-1)
+.github/workflows        publish-flags OIDC sync
+docs/qa-agent.md         Manual QA playbook
 ```
