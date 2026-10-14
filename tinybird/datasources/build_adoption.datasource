@@ -1,0 +1,12 @@
+TOKEN append_events APPEND
+
+SCHEMA >
+    `snapshot_date` Date `json:$.snapshot_date`,
+    `app` LowCardinality(String) `json:$.app`,
+    `build_id` String `json:$.build_id`,
+    `released_at` DateTime `json:$.released_at`,
+    `active_sessions` UInt32 `json:$.active_sessions`,
+    `session_share` Float32 `json:$.session_share`
+
+ENGINE "MergeTree"
+ENGINE_SORTING_KEY "snapshot_date, app, build_id"

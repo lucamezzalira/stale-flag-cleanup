@@ -1,0 +1,6 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "featurevisor"
+  - "tools/*"
+  - "agent/*"

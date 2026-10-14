@@ -1,0 +1,8 @@
+feature: checkout_redesign
+assertions:
+  - at: 50
+    description: "Checkout redesign is on at 100%"
+    environment: production
+    context:
+      userId: user-smoke-1
+    expectedToBeEnabled: true

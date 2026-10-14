@@ -1,0 +1,13 @@
+TOKEN append_events APPEND
+
+SCHEMA >
+    `day` Date `json:$.day`,
+    `flag_key` String `json:$.flag_key`,
+    `app` LowCardinality(String) `json:$.app`,
+    `build_id` String `json:$.build_id`,
+    `outcome` LowCardinality(String) `json:$.outcome`,
+    `variation` String `json:$.variation`,
+    `event_count` UInt64 `json:$.event_count`
+
+ENGINE "SummingMergeTree"
+ENGINE_SORTING_KEY "day, flag_key, app, build_id, outcome, variation"

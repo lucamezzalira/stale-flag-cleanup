@@ -1,0 +1,12 @@
+TOKEN append_events APPEND
+
+SCHEMA >
+    `timestamp` DateTime `json:$.timestamp`,
+    `session_id` String `json:$.session_id`,
+    `build_id` String `json:$.build_id`,
+    `app` LowCardinality(String) `json:$.app`
+
+ENGINE "MergeTree"
+ENGINE_PARTITION_KEY "toYYYYMM(timestamp)"
+ENGINE_SORTING_KEY "app, build_id, timestamp"
+ENGINE_TTL "timestamp + toIntervalDay(400)"

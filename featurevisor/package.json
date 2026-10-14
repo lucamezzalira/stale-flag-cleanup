@@ -1,0 +1,14 @@
+{
+  "name": "@stale-flags/featurevisor",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "lint": "featurevisor lint",
+    "build": "featurevisor build",
+    "test": "featurevisor test",
+    "typecheck": "echo 'no ts'"
+  },
+  "dependencies": {
+    "@featurevisor/cli": "3.8.0"
+  }
+}

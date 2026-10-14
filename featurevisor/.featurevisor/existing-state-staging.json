@@ -1,0 +1,102 @@
+{
+  "features": {
+    "checkout_redesign": {
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 100000
+        }
+      ],
+      "hash": "BxmIonBsRa"
+    },
+    "one_click_buy": {
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 100000
+        }
+      ],
+      "hash": "7IHQvMNB8q"
+    },
+    "promo_banner_2025": {
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 0
+        }
+      ],
+      "hash": "9s1eh1vH45"
+    },
+    "search_ranking_v2": {
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 5000
+        }
+      ],
+      "hash": "5Dir1mi80o"
+    },
+    "shipping_estimator": {
+      "variations": [
+        {
+          "value": "estimate_compact",
+          "weight": 60
+        },
+        {
+          "value": "estimate_detailed",
+          "weight": 40
+        }
+      ],
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 60000,
+          "allocation": [
+            {
+              "variation": "estimate_compact",
+              "range": [
+                0,
+                36000
+              ]
+            },
+            {
+              "variation": "estimate_detailed",
+              "range": [
+                36000,
+                60000
+              ]
+            }
+          ]
+        }
+      ],
+      "hash": "sTj3iWKpzA"
+    },
+    "wishlist": {
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 0
+        }
+      ],
+      "hash": "xV2M7TJ9vM"
+    },
+    "wishlist_sharing": {
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 100000
+        }
+      ],
+      "hash": "k9SUaxLXXd"
+    },
+    "wishlist_sharing_qr": {
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 100000
+        }
+      ],
+      "hash": "Uu3I8IBZOF"
+    }
+  }
+}

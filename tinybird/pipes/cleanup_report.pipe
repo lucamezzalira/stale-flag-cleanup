@@ -1,0 +1,20 @@
+TOKEN endpoint_read READ
+DESCRIPTION Human-facing report of candidates with verdicts
+
+NODE endpoint
+SQL >
+    %
+    SELECT
+        flag_key,
+        environment,
+        argMax(deprecated, captured_at) AS deprecated,
+        argMax(archived, captured_at) AS archived,
+        argMax(rollout_percentage, captured_at) AS rollout_percentage,
+        argMax(target_value, captured_at) AS target_value,
+        argMax(parent_key, captured_at) AS parent_key
+    FROM flag_definitions
+    WHERE environment = {{ String(environment, 'production') }}
+    GROUP BY flag_key, environment
+    ORDER BY flag_key
+
+TYPE ENDPOINT

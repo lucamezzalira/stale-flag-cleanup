@@ -1,0 +1,17 @@
+DESCRIPTION Materialize daily flag evaluation counts including variation
+
+NODE daily_rollup
+SQL >
+    SELECT
+        toDate(timestamp) AS day,
+        flag_key,
+        app,
+        build_id,
+        outcome,
+        variation,
+        count() AS event_count
+    FROM flag_evaluations
+    GROUP BY day, flag_key, app, build_id, outcome, variation
+
+TYPE MATERIALIZED
+DATASOURCE flag_daily_activity

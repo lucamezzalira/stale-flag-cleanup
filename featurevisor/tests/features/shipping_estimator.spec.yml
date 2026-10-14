@@ -1,0 +1,14 @@
+feature: shipping_estimator
+assertions:
+  - at: 10
+    description: "Inside 60% rollout"
+    environment: production
+    context:
+      userId: user-smoke-1
+    expectedToBeEnabled: true
+  - at: 80
+    description: "Outside 60% rollout"
+    environment: production
+    context:
+      userId: user-smoke-1
+    expectedToBeEnabled: false

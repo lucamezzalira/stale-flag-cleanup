@@ -1,0 +1,23 @@
+{
+  "flag_key": "wishlist_sharing",
+  "verdict": "inconclusive",
+  "route": "abandoned",
+  "reason": "Flag wishlist_sharing was never evaluated in the window because parent wishlist gated every lookup (15279 blocked_by_parent events). Absence of evaluations is not evidence of disuse.",
+  "target_value": "true",
+  "collapse_direction": "keep_gated_branch",
+  "evidence": {
+    "window_days": 90,
+    "min_session_share": 0.005,
+    "min_events_for_settled": 1000,
+    "rollout_percentage": 100,
+    "deprecated": 0,
+    "archived": 0,
+    "parent_key": "wishlist",
+    "evaluated_events": 0,
+    "blocked_events": 15279,
+    "variation_counts": {},
+    "descendants": [
+      "wishlist_sharing_qr"
+    ]
+  }
+}

@@ -1,0 +1,8 @@
+feature: wishlist_sharing
+assertions:
+  - at: 50
+    description: "Blocked because parent wishlist is off"
+    environment: production
+    context:
+      userId: user-smoke-1
+    expectedToBeEnabled: false

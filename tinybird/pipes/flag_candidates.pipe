@@ -1,0 +1,88 @@
+TOKEN endpoint_read READ
+DESCRIPTION Candidate flags for removal via lifecycle, abandoned, or settled routes
+
+NODE latest_defs
+SQL >
+    %
+    SELECT
+        flag_key,
+        argMax(parent_key, captured_at) AS parent_key,
+        argMax(rollout_percentage, captured_at) AS rollout_percentage,
+        argMax(target_value, captured_at) AS target_value,
+        argMax(variation_count, captured_at) AS variation_count,
+        argMax(deprecated, captured_at) AS deprecated,
+        argMax(archived, captured_at) AS archived,
+        max(captured_at) AS last_captured_at
+    FROM flag_definitions
+    WHERE environment = {{ String(environment, 'production') }}
+    GROUP BY flag_key
+
+NODE activity
+SQL >
+    %
+    SELECT
+        flag_key,
+        sumIf(event_count, outcome = 'evaluated') AS evaluated_events,
+        sumIf(event_count, outcome = 'blocked_by_parent') AS blocked_events,
+        uniqExactIf(variation, outcome = 'evaluated' AND variation != '') AS distinct_variations,
+        max(day) AS last_day
+    FROM flag_daily_activity
+    WHERE day >= today() - {{ Int32(window_days, 90) }}
+      AND app = 'web'
+    GROUP BY flag_key
+
+NODE descendants
+SQL >
+    SELECT
+        parent_key AS flag_key,
+        count() AS descendant_count
+    FROM latest_defs
+    WHERE parent_key != '' AND archived = 0
+    GROUP BY parent_key
+
+NODE last_decisions
+SQL >
+    SELECT
+        flag_key,
+        argMax(verdict, decided_at) AS last_verdict,
+        argMax(pr_url, decided_at) AS last_pr_url
+    FROM cleanup_decision_log
+    GROUP BY flag_key
+
+NODE endpoint
+SQL >
+    %
+    SELECT
+        d.flag_key,
+        multiIf(
+            d.deprecated = 1 OR d.archived = 1, 'lifecycle',
+            coalesce(a.evaluated_events, 0) = 0, 'abandoned',
+            'settled'
+        ) AS route,
+        if(a.last_day = toDate(0), CAST(NULL AS Nullable(DateTime)), toDateTime(a.last_day)) AS last_evaluated_at,
+        coalesce(a.evaluated_events, 0) AS evaluated_events,
+        coalesce(a.blocked_events, 0) AS blocked_events,
+        coalesce(a.distinct_variations, 0) AS distinct_variations,
+        d.parent_key,
+        coalesce(de.descendant_count, 0) AS descendant_count,
+        ld.last_verdict,
+        ld.last_pr_url
+    FROM latest_defs d
+    LEFT JOIN activity a ON d.flag_key = a.flag_key
+    LEFT JOIN descendants de ON d.flag_key = de.flag_key
+    LEFT JOIN last_decisions ld ON d.flag_key = ld.flag_key
+    WHERE d.archived = 0
+      AND d.last_captured_at < now() - toIntervalDay({{ Int32(window_days, 90) }})
+      AND (
+        d.deprecated = 1
+        OR d.archived = 1
+        OR coalesce(a.evaluated_events, 0) = 0
+        OR (
+          coalesce(a.evaluated_events, 0) >= {{ Int32(min_events_for_settled, 1000) }}
+          AND coalesce(a.distinct_variations, 0) = 1
+          AND d.rollout_percentage IN (0, 100)
+        )
+      )
+    ORDER BY d.flag_key
+
+TYPE ENDPOINT

@@ -1,0 +1,8 @@
+feature: wishlist
+assertions:
+  - at: 50
+    description: "Wishlist parent is off"
+    environment: production
+    context:
+      userId: user-smoke-1
+    expectedToBeEnabled: false

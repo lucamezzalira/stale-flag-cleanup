@@ -1,0 +1,31 @@
+{
+  "flag_key": "checkout_redesign",
+  "verdict": "blocked",
+  "route": "abandoned",
+  "reason": "Flag checkout_redesign is still evaluated by live build 2026-07-15.oldcafe1 (released 2026-07-15T00:00:00Z, session_share=0.040, ~241 evaluated events/day).",
+  "target_value": "true",
+  "collapse_direction": "keep_gated_branch",
+  "evidence": {
+    "window_days": 90,
+    "min_session_share": 0.005,
+    "min_events_for_settled": 1000,
+    "rollout_percentage": 100,
+    "deprecated": 0,
+    "archived": 0,
+    "parent_key": "",
+    "evaluated_events": 21654,
+    "blocked_events": 0,
+    "variation_counts": {
+      "true": 21654
+    },
+    "descendants": [],
+    "live_build_hits": [
+      {
+        "build_id": "2026-07-15.oldcafe1",
+        "session_share": 0.0399,
+        "evaluated_events": 21654,
+        "released_at": "2026-07-15T00:00:00Z"
+      }
+    ]
+  }
+}

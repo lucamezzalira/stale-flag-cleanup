@@ -1,0 +1,26 @@
+{
+  "flag_key": "wishlist",
+  "verdict": "blocked",
+  "route": "abandoned",
+  "reason": "Flag wishlist still has living descendants (wishlist_sharing, wishlist_sharing_qr). Removal must proceed bottom up.",
+  "target_value": "false",
+  "collapse_direction": "delete_gated_branch",
+  "evidence": {
+    "window_days": 90,
+    "min_session_share": 0.005,
+    "min_events_for_settled": 1000,
+    "rollout_percentage": 0,
+    "deprecated": 0,
+    "archived": 0,
+    "parent_key": "",
+    "evaluated_events": 17336,
+    "blocked_events": 0,
+    "variation_counts": {
+      "false": 17336
+    },
+    "descendants": [
+      "wishlist_sharing",
+      "wishlist_sharing_qr"
+    ]
+  }
+}

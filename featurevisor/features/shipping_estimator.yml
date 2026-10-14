@@ -1,0 +1,18 @@
+description: Shipping estimate UI mid-ramp with two variations
+tags:
+  - all
+bucketBy: userId
+variations:
+  - value: estimate_compact
+    weight: 60
+  - value: estimate_detailed
+    weight: 40
+rules:
+  staging:
+    - key: everyone
+      segments: "*"
+      percentage: 60
+  production:
+    - key: everyone
+      segments: "*"
+      percentage: 60

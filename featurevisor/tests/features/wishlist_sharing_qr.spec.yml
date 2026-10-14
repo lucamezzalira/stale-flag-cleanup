@@ -1,0 +1,8 @@
+feature: wishlist_sharing_qr
+assertions:
+  - at: 50
+    description: "Blocked because parent chain is off"
+    environment: production
+    context:
+      userId: user-smoke-1
+    expectedToBeEnabled: false

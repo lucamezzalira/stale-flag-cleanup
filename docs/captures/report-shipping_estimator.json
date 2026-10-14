@@ -1,0 +1,24 @@
+{
+  "flag_key": "shipping_estimator",
+  "verdict": "blocked",
+  "route": "settled",
+  "reason": "Flag shipping_estimator is mid-ramp at 60% (or multi-variation) with no single target_value, so the code cannot be collapsed safely.",
+  "target_value": "",
+  "collapse_direction": "none",
+  "evidence": {
+    "window_days": 90,
+    "min_session_share": 0.005,
+    "min_events_for_settled": 1000,
+    "rollout_percentage": 60,
+    "deprecated": 0,
+    "archived": 0,
+    "parent_key": "",
+    "evaluated_events": 34391,
+    "blocked_events": 0,
+    "variation_counts": {
+      "estimate_compact": 20703,
+      "estimate_detailed": 13688
+    },
+    "descendants": []
+  }
+}

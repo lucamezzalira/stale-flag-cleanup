@@ -1,0 +1,359 @@
+:root {
+  --ink: #12181f;
+  --ink-soft: #3d4a57;
+  --paper: #eef1f4;
+  --surface: #ffffff;
+  --line: #c5ced6;
+  --line-strong: #8a97a5;
+  --accent: #0f6e6a;
+  --accent-soft: #d5efed;
+  --warn: #8a5a00;
+  --warn-bg: #fff3d6;
+  --off: #6b7682;
+  --flag-bg: #15202b;
+  --flag-fg: #b8f0d0;
+  --radius: 2px;
+  --shadow: 0 1px 0 rgba(18, 24, 31, 0.06);
+  font-family: "DM Sans", system-ui, sans-serif;
+  color: var(--ink);
+  background:
+    linear-gradient(180deg, #f7f9fb 0%, var(--paper) 220px),
+    var(--paper);
+  line-height: 1.45;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.9rem 1.5rem;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(8px);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  margin-right: auto;
+}
+
+.brand-name {
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-size: 1.15rem;
+}
+
+.brand-tag {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.68rem;
+  color: var(--off);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.nav {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.nav a {
+  padding: 0.45rem 0.75rem;
+  border: 1px solid transparent;
+  color: var(--ink-soft);
+  font-weight: 500;
+  font-size: 0.95rem;
+}
+
+.nav a:hover {
+  border-color: var(--line);
+  background: var(--surface);
+}
+
+.nav a.active {
+  border-color: var(--ink);
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.cart-chip {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.75rem;
+  border: 1px solid var(--line-strong);
+  padding: 0.4rem 0.65rem;
+  background: var(--surface);
+}
+
+main.page {
+  width: min(1080px, calc(100% - 2rem));
+  margin: 0 auto;
+  padding: 1.75rem 0 3rem;
+  flex: 1;
+}
+
+.page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.page-head h1 {
+  margin: 0;
+  font-size: clamp(1.6rem, 3vw, 2.1rem);
+  letter-spacing: -0.04em;
+}
+
+.page-head p {
+  margin: 0.25rem 0 0;
+  color: var(--ink-soft);
+  max-width: 36rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+
+@media (max-width: 800px) {
+  .grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .nav {
+    display: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.product {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+}
+
+.product-visual {
+  aspect-ratio: 4 / 3;
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      #dfe5eb,
+      #dfe5eb 8px,
+      #e8eef3 8px,
+      #e8eef3 16px
+    );
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  color: var(--ink-soft);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.product-body {
+  padding: 0.9rem 1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex: 1;
+}
+
+.product-body h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+}
+
+.price {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.9rem;
+}
+
+.btn {
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: white;
+  padding: 0.65rem 1rem;
+  font-weight: 600;
+}
+
+.btn.secondary {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.banner {
+  background: var(--warn-bg);
+  border: 1px solid #e2c36a;
+  color: var(--warn);
+  padding: 0.85rem 1rem;
+  margin-bottom: 1rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+}
+
+.banner strong {
+  display: block;
+  color: var(--ink);
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  padding: 1.1rem 1.15rem;
+  margin-bottom: 1rem;
+}
+
+.panel h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+}
+
+.panel-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.panel-row:last-child {
+  border-bottom: 0;
+}
+
+.split {
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr;
+  gap: 1rem;
+}
+
+@media (max-width: 800px) {
+  .split {
+    grid-template-columns: 1fr;
+  }
+}
+
+.flag-callout {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  background: var(--flag-bg);
+  color: var(--flag-fg);
+  padding: 0.45rem 0.55rem;
+  margin: 0.65rem 0 0;
+  border-left: 3px solid var(--accent);
+  word-break: break-word;
+}
+
+.flag-callout .key {
+  color: #fff;
+  font-weight: 500;
+}
+
+.flag-callout .state-on {
+  color: #7dffb2;
+}
+
+.flag-callout .state-off {
+  color: #ffb4a8;
+}
+
+.flag-callout .state-blocked {
+  color: #ffd27a;
+}
+
+.empty-state {
+  border: 1px dashed var(--line-strong);
+  background: #f4f7f9;
+  padding: 1.25rem;
+  color: var(--ink-soft);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.muted {
+  color: var(--off);
+  font-size: 0.9rem;
+}
+
+.error {
+  color: #8b0000;
+  padding: 2rem;
+  max-width: 40rem;
+  margin: 2rem auto;
+}
+
+.loading {
+  padding: 3rem 1.5rem;
+  text-align: center;
+  color: var(--ink-soft);
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.qr-box {
+  width: 120px;
+  height: 120px;
+  border: 1px solid var(--ink);
+  background:
+    linear-gradient(#12181f 0 0) 0 0 / 20% 20%,
+    linear-gradient(#12181f 0 0) 100% 0 / 20% 20%,
+    linear-gradient(#12181f 0 0) 0 100% / 20% 20%,
+    linear-gradient(#12181f 0 0) 100% 100% / 20% 20%,
+    repeating-conic-gradient(#12181f 0% 25%, #fff 0% 50%) 50% / 16px 16px;
+  background-repeat: no-repeat;
+}

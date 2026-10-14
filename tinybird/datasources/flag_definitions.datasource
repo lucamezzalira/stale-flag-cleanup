@@ -1,0 +1,16 @@
+TOKEN append_events APPEND
+
+SCHEMA >
+    `captured_at` DateTime `json:$.captured_at`,
+    `datafile_revision` String `json:$.datafile_revision`,
+    `flag_key` String `json:$.flag_key`,
+    `parent_key` String `json:$.parent_key`,
+    `rollout_percentage` UInt8 `json:$.rollout_percentage`,
+    `target_value` String `json:$.target_value`,
+    `variation_count` UInt8 `json:$.variation_count`,
+    `deprecated` UInt8 `json:$.deprecated`,
+    `archived` UInt8 `json:$.archived`,
+    `environment` LowCardinality(String) `json:$.environment`
+
+ENGINE "MergeTree"
+ENGINE_SORTING_KEY "flag_key, environment, captured_at"

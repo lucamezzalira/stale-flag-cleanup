@@ -1,0 +1,15 @@
+TOKEN endpoint_read READ
+DESCRIPTION Ordered safety verdict for a single flag (mirror of packages/verdicts)
+
+NODE endpoint
+SQL >
+    %
+    SELECT
+        {{ String(flag_key) }} AS flag_key,
+        'see_local_verdicts_package_or_mcp' AS note,
+        {{ Int32(window_days, 90) }} AS window_days,
+        {{ Float32(min_session_share, 0.005) }} AS min_session_share,
+        {{ Int32(min_events_for_settled, 1000) }} AS min_events_for_settled,
+        {{ String(environment, 'production') }} AS environment
+
+TYPE ENDPOINT

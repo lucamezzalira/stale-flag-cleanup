@@ -1,0 +1,27 @@
+
+> stale-flag-cleanup@0.1.0 agent:surgeon /Users/lucamezzalira/Documents/tinybird
+> pnpm --filter @stale-flags/surgeon exec tsx src/index.ts --flag=promo_banner_2025 --dry-run
+
+Surgeon promo_banner_2025 collapse=delete_gated_branch dryRun=true
+Would remove:
+  featurevisor/features/promo_banner_2025.yml
+  featurevisor/tests/features/promo_banner_2025.spec.yml
+  collapse call sites in apps/web (delete_gated_branch)
+
+--- PR body preview ---
+
+## Flag cleanup: `promo_banner_2025`
+
+**Verdict:** safe_to_remove
+**Collapse:** delete_gated_branch (target_value=false)
+**Run:** manual
+
+manual
+
+### Evidence
+```json
+{}
+```
+
+Gates: tsc, vite build, featurevisor lint/test, flag-key grep, security diff allowlist.
+

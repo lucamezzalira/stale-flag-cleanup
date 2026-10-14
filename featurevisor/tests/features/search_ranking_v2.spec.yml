@@ -1,0 +1,14 @@
+feature: search_ranking_v2
+assertions:
+  - at: 1
+    description: "At low bucket may be enabled under 5%"
+    environment: production
+    context:
+      userId: user-smoke-1
+    expectedToBeEnabled: true
+  - at: 50
+    description: "At mid bucket disabled under 5%"
+    environment: production
+    context:
+      userId: user-smoke-1
+    expectedToBeEnabled: false

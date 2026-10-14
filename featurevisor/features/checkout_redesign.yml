@@ -1,0 +1,13 @@
+description: Redesigned checkout flow (stale on old builds)
+tags:
+  - all
+bucketBy: userId
+rules:
+  staging:
+    - key: everyone
+      segments: "*"
+      percentage: 100
+  production:
+    - key: everyone
+      segments: "*"
+      percentage: 100

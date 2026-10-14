@@ -1,0 +1,28 @@
+{
+  "name": "stale-flag-cleanup",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PoC: background agent removes stale Featurevisor flags using Tinybird SQL evidence",
+  "packageManager": "pnpm@10.25.0",
+  "scripts": {
+    "dev": "pnpm --filter @stale-flags/web dev",
+    "build": "pnpm -r run build",
+    "datafile:build": "pnpm --filter @stale-flags/featurevisor build",
+    "datafile:serve": "pnpm --filter @stale-flags/publish-datafile serve",
+    "datafile:publish": "pnpm --filter @stale-flags/publish-datafile publish-remote",
+    "publish-defs": "pnpm --filter @stale-flags/publish-defs start",
+    "seed": "pnpm --filter @stale-flags/generator seed",
+    "trickle": "pnpm --filter @stale-flags/generator trickle",
+    "report": "pnpm --filter @stale-flags/report exec tsx src/index.ts",
+    "agent:scout": "pnpm --filter @stale-flags/scout exec tsx src/index.ts",
+    "agent:surgeon": "pnpm --filter @stale-flags/surgeon exec tsx src/index.ts",
+    "agent:run": "pnpm --filter @stale-flags/scout exec tsx src/index.ts --full",
+    "demo:reset": "pnpm --filter @stale-flags/reset start",
+    "typecheck": "pnpm -r run typecheck",
+    "lint:flags": "pnpm --filter @stale-flags/featurevisor lint",
+    "test:flags": "pnpm --filter @stale-flags/featurevisor test"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
