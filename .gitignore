@@ -13,3 +13,6 @@ coverage/
 .tinybird/
 .tbwork/
 .tinyb
+infra/cdk.out/
+infra/cdk-outputs.json
+infra/dist/

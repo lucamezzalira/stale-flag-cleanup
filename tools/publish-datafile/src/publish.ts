@@ -26,7 +26,7 @@ async function main(): Promise<void> {
   }
 
   const prefix = process.env.DATAFILE_S3_PREFIX ?? "featurevisor";
-  const region = process.env.AWS_REGION ?? "eu-west-1";
+  const region = process.env.AWS_REGION ?? "us-east-1";
   const key = `${prefix}/production/featurevisor-all.json`;
   const body = await readFile(
     path.join(root, "featurevisor/datafiles/production/featurevisor-all.json"),
