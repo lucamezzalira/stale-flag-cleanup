@@ -1,6 +1,3 @@
-import { FlagCallout } from "../FlagCallout";
-import { useFlag } from "../flags";
-
 const PRODUCTS = [
   { name: "Classic Tee", price: "$28", code: "TEE-01" },
   { name: "Canvas Tote", price: "$42", code: "TOT-02" },
@@ -11,8 +8,6 @@ const PRODUCTS = [
 ];
 
 export function ListingPage() {
-  const promo = useFlag("promo_banner_2025");
-
   return (
     <div>
       <div className="page-head">
@@ -21,22 +16,6 @@ export function ListingPage() {
           <p>Catalog surface used to exercise abandoned promo traffic.</p>
         </div>
       </div>
-
-      {promo.enabled ? (
-        <div className="banner">
-          <div>
-            <strong>Spring promo is live</strong>
-            <span>Free returns on seasonal picks through April.</span>
-          </div>
-        </div>
-      ) : null}
-      <FlagCallout
-        flagKey="promo_banner_2025"
-        enabled={promo.enabled}
-        variation={promo.variation}
-        outcome={promo.outcome}
-        blockedBy={promo.blockedBy}
-      />
 
       <div className="grid" style={{ marginTop: "1rem" }}>
         {PRODUCTS.map((p) => (
