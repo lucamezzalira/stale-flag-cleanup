@@ -726,15 +726,17 @@ async function main(): Promise<void> {
       throw new Error("No staged changes after successful gates");
     }
     run("git", ["add", ...dirty]);
-    if (
-      !run("git", [
-        "commit",
-        "-m",
-        `remove flag ${payload.flag_key} (${payload.collapse_direction})`,
-      ])
-    ) {
+    // CodeBuild clones have no global identity; set local for this repo only.
+    run("git", ["config", "user.email", "stale-flags-agent@users.noreply.github.com"]);
+    run("git", ["config", "user.name", "stale-flags-agent"]);
+    const commit = runCaptured("git", [
+      "commit",
+      "-m",
+      `remove flag ${payload.flag_key} (${payload.collapse_direction})`,
+    ]);
+    if (!commit.ok) {
       restore();
-      throw new Error("git commit failed");
+      throw new Error(`git commit failed: ${commit.log.slice(0, 1000)}`);
     }
     if (!run("git", ["push", "-u", "origin", workBranch, "--force"])) {
       restore();
