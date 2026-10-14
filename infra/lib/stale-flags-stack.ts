@@ -214,7 +214,8 @@ export class StaleFlagsStack extends cdk.Stack {
                 "git log -1 --oneline",
                 "pnpm install --frozen-lockfile",
                 // Workspace packages export dist/; CI has no local build cache.
-                "pnpm --filter @stale-flags/defs-utils --filter @stale-flags/verdicts --filter @stale-flags/local-store run build",
+                // flag-client is required for apps/web tsc/vite gates in the surgeon.
+                "pnpm --filter @stale-flags/defs-utils --filter @stale-flags/verdicts --filter @stale-flags/local-store --filter @stale-flags/flag-client run build",
                 "SCOUT_SOURCE=tinybird BEDROCK_DISABLED=0 pnpm agent:run",
               ].join("\n"),
             ],
