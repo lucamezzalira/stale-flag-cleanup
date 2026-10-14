@@ -41,10 +41,30 @@ export class StaleFlagsStack extends cdk.Stack {
       enforceSSL: true,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
+      cors: [
+        {
+          allowedMethods: [s3.HttpMethods.GET, s3.HttpMethods.HEAD],
+          allowedOrigins: ["*"],
+          allowedHeaders: ["*"],
+          maxAge: 3000,
+        },
+      ],
     });
 
     const datafileOai = new cloudfront.OriginAccessIdentity(this, "DatafileOai");
     datafileBucket.grantRead(datafileOai);
+
+    // Browser fetch from the web CloudFront origin needs CORS on the datafile CDN
+    const datafileCors = new cloudfront.ResponseHeadersPolicy(this, "DatafileCors", {
+      comment: "Allow SPA to fetch Featurevisor datafiles",
+      corsBehavior: {
+        accessControlAllowOrigins: ["*"],
+        accessControlAllowHeaders: ["*"],
+        accessControlAllowMethods: ["GET", "HEAD", "OPTIONS"],
+        accessControlAllowCredentials: false,
+        originOverride: true,
+      },
+    });
 
     const datafileDist = new cloudfront.Distribution(this, "DatafileDistribution", {
       comment: "Featurevisor datafiles",
@@ -54,7 +74,8 @@ export class StaleFlagsStack extends cdk.Stack {
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
-        allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+        responseHeadersPolicy: datafileCors,
       },
     });
 

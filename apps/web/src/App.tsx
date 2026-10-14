@@ -20,12 +20,18 @@ export function App() {
     return <div className="loading">Loading Featurevisor datafile…</div>;
   }
   if (error) {
+    const datafileUrl =
+      (import.meta.env.VITE_DATAFILE_URL as string | undefined) || "(unset)";
     return (
       <main className="error">
         Could not load flags: {error}
         <p className="muted">
-          Start `pnpm datafile:serve` and set VITE_DATAFILE_URL to
-          http://127.0.0.1:4099/production/featurevisor-all.json
+          Datafile URL: <code>{datafileUrl}</code>
+        </p>
+        <p className="muted">
+          Local: <code>pnpm datafile:serve</code> and point{" "}
+          <code>VITE_DATAFILE_URL</code> at that server. Deployed: rebuild with{" "}
+          <code>pnpm infra:sync</code> so the app uses the CloudFront datafile.
         </p>
       </main>
     );

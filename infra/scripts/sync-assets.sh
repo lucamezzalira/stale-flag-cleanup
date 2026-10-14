@@ -27,9 +27,8 @@ aws s3 sync featurevisor/datafiles/ "s3://${data_bucket}/featurevisor/" \
   --cache-control "max-age=60" \
   --exclude "*" --include "*.json"
 
-echo "Building web with VITE_DATAFILE_URL=$DATAFILE_URL …"
-export VITE_DATAFILE_URL="$DATAFILE_URL"
-# Keep Tinybird browser ingest from local .env if present
+# Load Tinybird browser ingest from .env first, then force CloudFront datafile URL
+# (sourcing .env must not overwrite VITE_DATAFILE_URL with a local stand-in)
 if [[ -f .env ]]; then
   set -a
   # shellcheck disable=SC1091
@@ -38,6 +37,8 @@ if [[ -f .env ]]; then
   export VITE_TINYBIRD_API_HOST="${VITE_TINYBIRD_API_HOST:-$TINYBIRD_API_HOST}"
   export VITE_TINYBIRD_APPEND_TOKEN="${VITE_TINYBIRD_APPEND_TOKEN:-$TINYBIRD_APPEND_TOKEN}"
 fi
+export VITE_DATAFILE_URL="$DATAFILE_URL"
+echo "Building web with VITE_DATAFILE_URL=$VITE_DATAFILE_URL …"
 pnpm --filter @stale-flags/web build
 
 echo "Uploading web → s3://$web_bucket/ …"
