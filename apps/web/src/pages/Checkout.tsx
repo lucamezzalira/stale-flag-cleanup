@@ -3,7 +3,6 @@ import { useFlag } from "../flags";
 
 export function CheckoutPage() {
   const redesign = useFlag("checkout_redesign");
-  const oneClick = useFlag("one_click_buy");
   const shipping = useFlag("shipping_estimator");
 
   return (
@@ -35,23 +34,10 @@ export function CheckoutPage() {
               <strong className="price">$70</strong>
             </div>
             <div style={{ marginTop: "1rem" }}>
-              {oneClick.enabled ? (
-                <button type="button" className="btn">
-                  One-click buy
-                </button>
-              ) : (
-                <button type="button" className="btn secondary">
-                  Continue to payment
-                </button>
-              )}
+              <button type="button" className="btn">
+                One-click buy
+              </button>
             </div>
-            <FlagCallout
-              flagKey="one_click_buy"
-              enabled={oneClick.enabled}
-              variation={oneClick.variation}
-              outcome={oneClick.outcome}
-              blockedBy={oneClick.blockedBy}
-            />
           </section>
 
           <section className="panel">
