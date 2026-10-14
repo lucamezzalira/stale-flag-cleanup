@@ -30,6 +30,8 @@ pnpm infra:agent-run
 
 After deploy, add GitHub repo secret `AWS_GHA_PUBLISH_ROLE_ARN` = stack output `GitHubPublishRoleArn` so `publish-flags.yml` can assume the OIDC role.
 
+GitHub may emit OIDC `sub` as `repo:owner/repo:ref:…` or the ID form `repo:owner@id/repo@id:ref:…`. The role trust allows both. The GHA role also needs `cloudformation:DescribeStacks` on `StaleFlagsStack` to resolve bucket/distribution outputs.
+
 If the account already has a GitHub OIDC provider, redeploy with:
 
 ```bash
