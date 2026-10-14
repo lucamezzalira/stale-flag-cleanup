@@ -6,11 +6,95 @@ All telemetry in this repository is **synthetic**. The generator is in `tools/ge
 
 ## Architecture
 
-Signals in: flag evaluation events + session beacons (`build_id`), Featurevisor definition snapshots (including `deprecated` / `archived`), build adoption shares.
+```mermaid
+flowchart TB
+  subgraph runtime [Runtime signals]
+    FV[Featurevisor YAML + datafile]
+    WEB[apps/web + packages/flag-client]
+    CDN[Datafile CDN / local serve]
+    FV -->|build datafile| CDN
+    CDN -->|datafileUrl| WEB
+    WEB -->|flag_evaluations + session_beacons| TB
+  end
 
-Questions out: `flag_candidates`, `flag_safety_check`, `cleanup_report`.
+  subgraph evidence [Evidence layer]
+    GEN[tools/generator seed]
+    DEFS[tools/publish-defs]
+    TB[(Tinybird<br/>datasources + pipes)]
+    LOCAL[.local-data + packages/verdicts]
+    GEN -->|synthetic history| TB
+    GEN -->|same rows| LOCAL
+    DEFS -->|flag_definitions| TB
+    FV --> DEFS
+  end
 
-Agent on top: deterministic **scout** (REST / local store) writes `cleanup_decision_log` and dispatches **surgeon** (local Ollama for PR prose; deterministic code collapse). PRs target the `demo` branch only, never `main`.
+  subgraph questions [Published questions]
+    CAND[flag_candidates]
+    SAFE[flag_safety_check]
+    RPT[cleanup_report]
+    TB --> CAND
+    TB --> SAFE
+    TB --> RPT
+    LOCAL -.local mirror.-> RPT
+  end
+
+  subgraph agent [Background agent]
+    SCOUT[scout]
+    SURG[surgeon]
+    OLLAMA[Ollama optional PR prose]
+    GH[GitHub PR into demo]
+    LOG[cleanup_decision_log]
+    CAND --> SCOUT
+    SAFE --> SCOUT
+    SCOUT -->|verdict + reason| LOG
+    SCOUT -->|safe_to_remove only| SURG
+    SURG --> OLLAMA
+    SURG -->|collapse YAML + app code| GH
+    SURG --> LOG
+  end
+
+  subgraph humans [Human surfaces]
+    CLI[tools/report]
+    MCP[Tinybird MCP]
+    RPT --> CLI
+    RPT --> MCP
+    SAFE --> MCP
+  end
+```
+
+### How data moves
+
+1. **Featurevisor** holds flag definitions (`featurevisor/features/*.yml`), including `deprecated` / `archived` and parent/child links. A built **datafile** is served remotely (S3/CloudFront in prod, `pnpm datafile:serve` locally).
+2. **`apps/web` + `flag-client`** evaluate flags from that datafile and emit evaluation events and session beacons (with `build_id`). In this PoC, telemetry is mostly **synthetic** from the generator; the web app proves the client path.
+3. **`publish-defs`** snapshots Featurevisor YAML into `flag_definitions` (rollout %, target value, lifecycle flags). That is what the agent uses for collapse direction. It must not guess from code.
+4. **`tools/generator`** seeds ~90 days of `flag_daily_activity` and `build_adoption` so all eight demo verdicts reproduce. Same rules apply locally via `.local-data` and `packages/verdicts`.
+5. **Tinybird** stores the joined evidence and exposes only three pipes as APIs: candidates, safety check, cleanup report. The agent is not given raw warehouse access.
+6. **Scout** reads those answers (or the local verdict mirror), writes every decision to `cleanup_decision_log`, and only dispatches **surgeon** for `safe_to_remove`.
+7. **Surgeon** collapses Featurevisor YAML and app call sites deterministically, optionally asks Ollama for PR prose, runs validation/security checks, and opens a PR against **`demo`** only (never `main`).
+8. **Humans** use `pnpm report`, the Tinybird UI, or MCP (`cleanup_report` / `flag_safety_check`) to inspect the same verdicts the agent executes.
+
+### Parts in this repo
+
+| Part | Role |
+|---|---|
+| `featurevisor/` | Source of truth for flag keys, rollout, parents, `deprecated` / `archived` |
+| `packages/flag-client` | Featurevisor SDK wrapper, event batching, `datafileUrl` load |
+| `apps/web` | Northline demo shop that evaluates flags and shows callouts |
+| `tools/publish-datafile` | Build/serve/publish the datafile (local CDN stand-in or S3) |
+| `tools/publish-defs` | Push definition snapshots into Tinybird / print NDJSON |
+| `tools/generator` | Synthetic seed + trickle traffic for the eight-flag matrix |
+| `tinybird/` | Datasources, MV, and `flag_candidates` / `flag_safety_check` / `cleanup_report` |
+| `packages/verdicts` | TypeScript mirror of the safety rules for offline `pnpm report` / agent |
+| `packages/local-store` | `.local-data` NDJSON + optional Tinybird Events ingest |
+| `packages/defs-utils` | Shared `target_value` / collapse direction helpers |
+| `tools/report` | CLI table of verdicts from local store |
+| `agent/scout` | Deterministic scheduler: candidates → verdict → log → dispatch |
+| `agent/surgeon` | Code + YAML collapse, optional Ollama text, PR to `demo` |
+| `tools/reset` | Reset `demo` to `demo-clean`, reseed, republish |
+| `infra/` | Notes for later AWS / AgentCore hosting |
+| `docs/` | Capture checklist and sample artefacts for the article |
+
+Refusals (`blocked`, `inconclusive`) are intentional demo outcomes. Only `promo_banner_2025` (delete gated branch) and `one_click_buy` (keep gated branch) should become PRs.
 
 ## Prerequisites
 
