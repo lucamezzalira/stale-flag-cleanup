@@ -135,7 +135,7 @@ Sections:
 |---|---|---|
 | Scout task `CannotPullContainer` / exec format | Image arch ≠ task arch | Task is ARM64; rebuild image on matching arch or set `platform` |
 | ScoutSucceeded but LoadScoutResult fails | Missing `scout.json` | RESULT_S3_URI write in scout; task role S3 put |
-| ParseScoutResult fails | Body encoding | ASL uses `States.Base64Decode` + `StringToJson` on GetObject Body |
+| ParseScoutResult fails | Body encoding | ASL should use `States.StringToJson($.scoutRaw.body)` only (CallAwsService Body is already UTF-8) |
 | HasCandidates → NothingToDo | No safe flags / skip due to `last_pr_url` | Tinybird decision log; truncate if re-demo |
 | Surgeon Map item → SurgeonFailed | Gates / Bedrock / git | ECS logs for that FLAG_KEY |
 | Notify never fires | Choice took NothingToDo or Map empty | scout.json candidates |
