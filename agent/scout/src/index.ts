@@ -5,7 +5,10 @@ import { appendDecisions, loadStore } from "@stale-flags/local-store";
 import {
   cleanupReport,
   listCandidates,
+  type CollapseDirection,
+  type Route,
   type SafetyCheckResult,
+  type Verdict,
 } from "@stale-flags/verdicts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -15,28 +18,271 @@ function runId(): string {
   return `run_${new Date().toISOString().replace(/[-:Z.]/g, "").slice(0, 15)}`;
 }
 
+type CandidateRow = {
+  flag_key: string;
+  route?: string;
+  last_verdict?: string | null;
+  last_pr_url?: string | null;
+  last_datafile_revision?: string | null;
+  datafile_revision?: string | null;
+};
+
+type PipeRow = {
+  flag_key: string;
+  verdict: string;
+  route: string;
+  reason: string;
+  target_value: string;
+  collapse_direction: string;
+  datafile_revision?: string;
+  evaluated_events?: number;
+  blocked_events?: number;
+  descendant_count?: number;
+  evaluating_share?: number;
+  rollout_percentage?: number;
+  parent_key?: string;
+};
+
+function useTinybird(): boolean {
+  return Boolean(
+    process.env.TINYBIRD_TOKEN &&
+      (process.env.SCOUT_SOURCE === "tinybird" ||
+        process.env.SCOUT_SOURCE === "mcp" ||
+        process.env.AWS_EXECUTION_ENV ||
+        process.env.CODEBUILD_BUILD_ID),
+  );
+}
+
+async function callTinybirdEndpoint<T>(
+  endpointName: string,
+  params: Record<string, string | number> = {},
+): Promise<T[]> {
+  const host =
+    process.env.TINYBIRD_API_HOST ?? "https://api.us-east.aws.tinybird.co";
+  const token = process.env.TINYBIRD_TOKEN ?? "";
+  if (!token) throw new Error("TINYBIRD_TOKEN is required for Tinybird mode");
+
+  // Prefer Tinybird MCP Streamable HTTP (call_endpoint). Fall back to REST pipes.
+  try {
+    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+    const { StreamableHTTPClientTransport } = await import(
+      "@modelcontextprotocol/sdk/client/streamableHttp.js"
+    );
+    const url = new URL("https://mcp.tinybird.co");
+    url.searchParams.set("token", token);
+    url.searchParams.set("host", host);
+    const transport = new StreamableHTTPClientTransport(url);
+    const client = new Client({ name: "stale-flags-scout", version: "0.1.0" });
+    await client.connect(transport);
+    try {
+      const result = await client.callTool({
+        name: "call_endpoint",
+        arguments: {
+          endpoint_name: endpointName,
+          params,
+          response_format: "JSON",
+        },
+      });
+      const text = extractMcpText(result);
+      const parsed = JSON.parse(text) as { data?: T[] } | T[];
+      if (Array.isArray(parsed)) return parsed;
+      return parsed.data ?? [];
+    } finally {
+      await client.close().catch(() => undefined);
+    }
+  } catch (err) {
+    console.warn(
+      `Tinybird MCP call_endpoint failed (${err instanceof Error ? err.message : err}); falling back to REST`,
+    );
+  }
+
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
+  const res = await fetch(
+    `${host.replace(/\/$/, "")}/v0/pipes/${endpointName}.json?${qs}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Tinybird pipe ${endpointName}: ${res.status} ${text}`);
+  }
+  const json = JSON.parse(text) as { data: T[] };
+  return json.data ?? [];
+}
+
+function extractMcpText(result: unknown): string {
+  const r = result as {
+    content?: Array<{ type?: string; text?: string }>;
+    structuredContent?: unknown;
+  };
+  if (typeof r.structuredContent === "object" && r.structuredContent) {
+    return JSON.stringify(r.structuredContent);
+  }
+  const text = (r.content ?? [])
+    .filter((c) => c.type === "text" && c.text)
+    .map((c) => c.text!)
+    .join("\n");
+  if (!text) throw new Error("Empty MCP call_endpoint response");
+  // MCP sometimes wraps or appends prose; pull the first JSON object/array.
+  const start = text.search(/[\{\[]/);
+  if (start === -1) return text;
+  const slice = text.slice(start);
+  try {
+    JSON.parse(slice);
+    return slice;
+  } catch {
+    // Walk braces to find a parseable prefix
+    for (let end = slice.length; end > 1; end--) {
+      try {
+        JSON.parse(slice.slice(0, end));
+        return slice.slice(0, end);
+      } catch {
+        /* continue */
+      }
+    }
+  }
+  return text;
+}
+
+function shouldSkip(
+  c: CandidateRow,
+  failedOrOpen: Map<string, { verdict: string; pr_url: string; rev: string }>,
+): string | null {
+  if (c.last_pr_url) return `open PR already logged (${c.last_pr_url})`;
+  const local = failedOrOpen.get(c.flag_key);
+  if (local?.pr_url) return `open PR already logged (${local.pr_url})`;
+  const lastVerdict = c.last_verdict || local?.verdict;
+  const lastRev = c.last_datafile_revision || local?.rev || "";
+  const currentRev = c.datafile_revision || "";
+  if (lastVerdict === "failed" && lastRev && lastRev === currentRev) {
+    return `failed on same datafile_revision=${lastRev}`;
+  }
+  return null;
+}
+
+function toResult(row: PipeRow & { "d.flag_key"?: string }): SafetyCheckResult {
+  const flagKey = row.flag_key || row["d.flag_key"] || "";
+  return {
+    flag_key: flagKey,
+    verdict: row.verdict as Verdict,
+    route: row.route as Route,
+    reason: row.reason,
+    target_value: row.target_value,
+    collapse_direction: row.collapse_direction as CollapseDirection,
+    datafile_revision: row.datafile_revision,
+    evidence: {
+      evaluated_events: row.evaluated_events,
+      blocked_events: row.blocked_events,
+      descendant_count: row.descendant_count,
+      evaluating_share: row.evaluating_share,
+      rollout_percentage: row.rollout_percentage,
+      parent_key: row.parent_key,
+      datafile_revision: row.datafile_revision,
+      source: "tinybird",
+    },
+  };
+}
+
+async function loadFromTinybird(): Promise<{
+  candidates: CandidateRow[];
+  reports: SafetyCheckResult[];
+}> {
+  const candidates = await callTinybirdEndpoint<CandidateRow>("flag_candidates", {
+    environment: "production",
+    window_days: 90,
+  });
+  const reports = (
+    await callTinybirdEndpoint<PipeRow>("cleanup_report", {
+      environment: "production",
+      window_days: 90,
+    })
+  ).map(toResult);
+  return { candidates, reports };
+}
+
+async function loadFromLocal(): Promise<{
+  candidates: CandidateRow[];
+  reports: SafetyCheckResult[];
+  decisions: Array<{
+    flag_key: string;
+    verdict: string;
+    pr_url: string;
+    datafile_revision?: string;
+  }>;
+}> {
+  const store = await loadStore();
+  const candidates = listCandidates(store).map((c) => ({
+    flag_key: c.flag_key,
+    route: c.route,
+    datafile_revision: c.datafile_revision,
+    last_verdict: undefined as string | undefined,
+    last_pr_url: undefined as string | undefined,
+    last_datafile_revision: undefined as string | undefined,
+  }));
+  // Attach latest local decisions for skip logic
+  const latest = new Map<
+    string,
+    { verdict: string; pr_url: string; rev: string }
+  >();
+  for (const d of store.decisions) {
+    latest.set(d.flag_key, {
+      verdict: d.verdict,
+      pr_url: d.pr_url,
+      rev: d.datafile_revision ?? "",
+    });
+  }
+  for (const c of candidates) {
+    const d = latest.get(c.flag_key);
+    if (!d) continue;
+    c.last_verdict = d.verdict;
+    c.last_pr_url = d.pr_url;
+    c.last_datafile_revision = d.rev;
+  }
+  return {
+    candidates,
+    reports: cleanupReport(store),
+    decisions: store.decisions,
+  };
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.filter((a) => a !== "--");
   const dryRun = argv.includes("--dry-run") || !argv.includes("--full");
   const full = argv.includes("--full");
-  const store = await loadStore();
-  const candidates = listCandidates(store);
-  const openPr = new Set(
-    store.decisions
-      .filter((d) => d.pr_url && d.verdict === "safe_to_remove")
-      .map((d) => d.flag_key),
+  const tinybird = useTinybird() || argv.includes("--tinybird");
+  const id = runId();
+  console.log(
+    `Scout run_id=${id} dryRun=${dryRun || !full} source=${tinybird ? "tinybird-mcp" : "local"}\n`,
   );
 
-  const id = runId();
-  console.log(`Scout run_id=${id} dryRun=${dryRun || !full}\n`);
+  const localMeta = tinybird ? null : await loadFromLocal();
+  const remote = tinybird ? await loadFromTinybird() : null;
+  const candidates = tinybird ? remote!.candidates : localMeta!.candidates;
+  const reports = tinybird ? remote!.reports : localMeta!.reports;
+  const reportByKey = new Map(reports.map((r) => [r.flag_key, r]));
+
+  const failedOrOpen = new Map<
+    string,
+    { verdict: string; pr_url: string; rev: string }
+  >();
+  if (localMeta) {
+    for (const d of localMeta.decisions) {
+      failedOrOpen.set(d.flag_key, {
+        verdict: d.verdict,
+        pr_url: d.pr_url,
+        rev: d.datafile_revision ?? "",
+      });
+    }
+  }
 
   const results: SafetyCheckResult[] = [];
   for (const c of candidates) {
-    if (openPr.has(c.flag_key)) {
-      console.log(`skip ${c.flag_key} (open PR already logged)`);
+    const skip = shouldSkip(c, failedOrOpen);
+    if (skip) {
+      console.log(`skip ${c.flag_key} (${skip})`);
       continue;
     }
-    const report = cleanupReport(store).find((r) => r.flag_key === c.flag_key);
+    const report = reportByKey.get(c.flag_key);
     if (!report) continue;
     results.push(report);
     console.log(
@@ -46,24 +292,33 @@ async function main(): Promise<void> {
   }
 
   const decisions = results.map((r) => ({
-    decided_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+    decided_at: new Date().toISOString(),
     run_id: id,
     flag_key: r.flag_key,
     verdict: r.verdict,
+    route: r.route,
     reason: r.reason,
     evidence: JSON.stringify(r.evidence),
     pr_url: "",
+    datafile_revision: r.datafile_revision ?? "",
   }));
-
-  if (!dryRun && (full || !process.argv.includes("--dry-run"))) {
-    // default without flags: dry-ish print only unless --full
-  }
 
   if (dryRun || !full) {
     console.log(
-      `\nProposed surgeon actions: ${results.filter((r) => r.verdict === "safe_to_remove" && r.collapse_direction !== "none").map((r) => r.flag_key).join(", ") || "(none)"}`,
+      `\nProposed surgeon actions: ${
+        results
+          .filter(
+            (r) =>
+              r.verdict === "safe_to_remove" &&
+              r.collapse_direction !== "none",
+          )
+          .map((r) => r.flag_key)
+          .join(", ") || "(none)"
+      }`,
     );
-    console.log("Re-run with --full to write cleanup_decision_log and dispatch surgeons.");
+    console.log(
+      "Re-run with --full to write cleanup_decision_log and dispatch surgeons.",
+    );
     return;
   }
 
@@ -79,7 +334,13 @@ async function main(): Promise<void> {
     console.log(`\nDispatching surgeon for ${r.flag_key}…`);
     const proc = spawnSync(
       "pnpm",
-      ["--filter", "@stale-flags/surgeon", "start", "--", `--payload=${payload}`],
+      [
+        "--filter",
+        "@stale-flags/surgeon",
+        "start",
+        "--",
+        `--payload=${payload}`,
+      ],
       { cwd: root, stdio: "inherit", shell: process.platform === "win32" },
     );
     if (proc.status !== 0) {

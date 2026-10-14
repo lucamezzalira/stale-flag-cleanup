@@ -1,13 +1,17 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  DEMO_TINYBIRD_TABLES,
+  truncateTinybirdDatasources,
+} from "@stale-flags/local-store";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
 const demoBranch = process.env.DEMO_BRANCH ?? "demo";
 const tag = process.env.DEMO_RESET_TAG ?? "demo-clean";
 
-function run(cmd: string, args: string[]): void {
+function run(cmd: string, args: string[], opts?: { fatal?: boolean }): void {
   const r = spawnSync(cmd, args, {
     cwd: root,
     stdio: "inherit",
@@ -15,7 +19,11 @@ function run(cmd: string, args: string[]): void {
     env: process.env,
   });
   if (r.status !== 0) {
-    console.warn(`${cmd} ${args.join(" ")} exited ${r.status}`);
+    const msg = `${cmd} ${args.join(" ")} exited ${r.status}`;
+    if (opts?.fatal !== false && (cmd === "git" || cmd === "pnpm")) {
+      throw new Error(msg);
+    }
+    console.warn(msg);
   }
 }
 
@@ -51,13 +59,18 @@ async function main(): Promise<void> {
     }
   }
 
-  run("git", ["fetch", "origin", tag]);
-  run("git", ["checkout", demoBranch]);
-  run("git", ["reset", "--hard", tag]);
+  run("git", ["fetch", "origin", tag], { fatal: true });
+  run("git", ["checkout", demoBranch], { fatal: true });
+  run("git", ["reset", "--hard", tag], { fatal: true });
 
-  run("pnpm", ["datafile:publish"]);
-  run("pnpm", ["publish-defs"]);
-  run("pnpm", ["seed"]);
+  // Clear Tinybird Cloud before reseed so last_pr_url / stacked activity cannot poison the next run.
+  // seed itself also truncates; this makes reset safe even if seed is skipped.
+  await truncateTinybirdDatasources([...DEMO_TINYBIRD_TABLES]);
+
+  run("pnpm", ["datafile:publish"], { fatal: true });
+  // seed writes flag_definitions (with backdated captured_at). Do not also run
+  // publish-defs here: that would set captured_at=now() and confuse age filters.
+  run("pnpm", ["seed"], { fatal: true });
 
   console.log("Demo reset complete.");
 }

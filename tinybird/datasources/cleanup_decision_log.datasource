@@ -1,13 +1,27 @@
 TOKEN append_events APPEND
 
 SCHEMA >
-    `decided_at` DateTime `json:$.decided_at`,
+    `decided_at` DateTime64(3) `json:$.decided_at`,
     `run_id` String `json:$.run_id`,
     `flag_key` String `json:$.flag_key`,
     `verdict` LowCardinality(String) `json:$.verdict`,
+    `route` LowCardinality(String) `json:$.route`,
     `reason` String `json:$.reason`,
     `evidence` String `json:$.evidence`,
-    `pr_url` String `json:$.pr_url`
+    `pr_url` String `json:$.pr_url`,
+    `datafile_revision` String `json:$.datafile_revision`
 
 ENGINE "MergeTree"
 ENGINE_SORTING_KEY "flag_key, decided_at"
+
+FORWARD_QUERY >
+    SELECT
+        CAST(decided_at, 'DateTime64(3)') AS decided_at,
+        run_id,
+        flag_key,
+        verdict,
+        CAST('' AS LowCardinality(String)) AS route,
+        reason,
+        evidence,
+        pr_url,
+        CAST('' AS String) AS datafile_revision

@@ -9,18 +9,28 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendDecisions } from "@stale-flags/local-store";
+import {
+  BedrockRuntimeClient,
+  ConverseCommand,
+  type Message,
+} from "@aws-sdk/client-bedrock-runtime";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "../../..");
+const MAX_ATTEMPTS = 4;
+const MAX_LINE_DELTA = 0.65;
+const FLAG_KEY_RE = /^[a-z0-9_]+$/;
 
 type Payload = {
   flag_key: string;
   verdict: string;
   reason: string;
+  route?: string;
   target_value: string;
   collapse_direction: "keep_gated_branch" | "delete_gated_branch" | "none";
   evidence: Record<string, unknown>;
   run_id: string;
+  datafile_revision?: string;
 };
 
 function parsePayload(): Payload {
@@ -34,6 +44,7 @@ function parsePayload(): Payload {
   }
   if (flagArg) {
     const key = flagArg.slice("--flag=".length);
+    if (!FLAG_KEY_RE.test(key)) throw new Error(`Invalid flag_key: ${key}`);
     return {
       flag_key: key,
       verdict: "safe_to_remove",
@@ -48,37 +59,32 @@ function parsePayload(): Payload {
   throw new Error("Provide --payload=… or --flag=");
 }
 
-async function ollamaPrBody(payload: Payload, diffStat: string): Promise<string> {
-  if (process.env.OLLAMA_DISABLED === "1") {
-    return fallbackBody(payload);
+function assertFlagKey(flagKey: string): void {
+  if (!FLAG_KEY_RE.test(flagKey)) {
+    throw new Error(`Invalid flag_key (must match ${FLAG_KEY_RE}): ${flagKey}`);
   }
-  const host = process.env.OLLAMA_HOST ?? "http://127.0.0.1:11434";
-  const model = process.env.OLLAMA_MODEL ?? "qwen3:8b";
-  const prompt = `Write a short GitHub PR body (markdown) for removing feature flag ${payload.flag_key}.
-Verdict: ${payload.verdict}
-Reason: ${payload.reason}
-Collapse: ${payload.collapse_direction}
-Target: ${payload.target_value}
-Run id: ${payload.run_id}
-Diff stats: ${diffStat}
-Keep it factual, no hype.`;
+}
 
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15_000);
-    const res = await fetch(`${host.replace(/\/$/, "")}/api/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model, prompt, stream: false }),
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    if (!res.ok) throw new Error(String(res.status));
-    const json = (await res.json()) as { response?: string };
-    return json.response ?? fallbackBody(payload);
-  } catch {
-    return fallbackBody(payload);
-  }
+function runCaptured(
+  cmd: string,
+  args: string[],
+): { ok: boolean; log: string; status: number | null; error?: Error } {
+  const r = spawnSync(cmd, args, {
+    cwd: root,
+    encoding: "utf8",
+    shell: process.platform === "win32",
+  });
+  const log = `${r.stdout ?? ""}\n${r.stderr ?? ""}`.trim();
+  return {
+    ok: r.status === 0,
+    log,
+    status: r.status,
+    error: r.error,
+  };
+}
+
+function run(cmd: string, args: string[]): boolean {
+  return runCaptured(cmd, args).ok;
 }
 
 function fallbackBody(payload: Payload): string {
@@ -99,102 +105,37 @@ Gates: tsc, vite build, featurevisor lint/test, flag-key grep, security diff all
 `;
 }
 
-function applyEdits(payload: Payload): string[] {
-  const changed: string[] = [];
-  const feature = path.join(
-    root,
-    "featurevisor/features",
-    `${payload.flag_key}.yml`,
-  );
-  const test = path.join(
-    root,
-    "featurevisor/tests/features",
-    `${payload.flag_key}.spec.yml`,
-  );
-  if (existsSync(feature)) {
-    unlinkSync(feature);
-    changed.push(feature);
+function assertRgOk(grep: {
+  error?: Error;
+  status: number | null;
+  stderr?: string | null;
+}): void {
+  if (grep.error || grep.status === 127) {
+    throw new Error(
+      `ripgrep (rg) is required but missing: ${grep.error?.message ?? `status ${grep.status}`}`,
+    );
   }
-  if (existsSync(test)) {
-    unlinkSync(test);
-    changed.push(test);
+  // 0 = matches, 1 = no matches; anything else is a hard failure (do not fail-open)
+  if (grep.status !== 0 && grep.status !== 1) {
+    throw new Error(
+      `ripgrep failed with status ${grep.status}: ${grep.stderr ?? ""}`,
+    );
   }
-
-  if (payload.flag_key === "promo_banner_2025") {
-    // delete_gated_branch: promo was at 0% / target false → drop banner + callout
-    const listing = path.join(root, "apps/web/src/pages/Listing.tsx");
-    writeFileSync(
-      listing,
-      `const PRODUCTS = [
-  { name: "Classic Tee", price: "$28", code: "TEE-01" },
-  { name: "Canvas Tote", price: "$42", code: "TOT-02" },
-  { name: "Wool Cap", price: "$36", code: "CAP-03" },
-  { name: "Field Jacket", price: "$168", code: "JKT-04" },
-  { name: "Trail Bottle", price: "$24", code: "BTL-05" },
-  { name: "Desk Lamp", price: "$88", code: "LMP-06" },
-];
-
-export function ListingPage() {
-  return (
-    <div>
-      <div className="page-head">
-        <div>
-          <h1>Products</h1>
-          <p>Catalog surface used to exercise abandoned promo traffic.</p>
-        </div>
-      </div>
-
-      <div className="grid" style={{ marginTop: "1rem" }}>
-        {PRODUCTS.map((p) => (
-          <article className="product" key={p.code}>
-            <div className="product-visual">{p.code}</div>
-            <div className="product-body">
-              <h2>{p.name}</h2>
-              <div className="price">{p.price}</div>
-              <button type="button" className="btn secondary">
-                Add to cart
-              </button>
-            </div>
-          </article>
-        ))}
-      </div>
-    </div>
-  );
 }
-`,
-    );
-    changed.push(listing);
-  }
 
-  if (payload.flag_key === "one_click_buy") {
-    // keep_gated_branch: target true → keep one-click CTA, drop flag plumbing
-    const checkout = path.join(root, "apps/web/src/pages/Checkout.tsx");
-    let src = readFileSync(checkout, "utf8");
-    src = src.replace(/\s*const oneClick = useFlag\("one_click_buy"\);\n/, "\n");
-    src = src.replace(
-      /\s*\{oneClick\.enabled \? \(\s*<button type="button" className="btn">\s*One-click buy\s*<\/button>\s*\) : \(\s*<button type="button" className="btn secondary">\s*Continue to payment\s*<\/button>\s*\)\}\s*/,
-      `
-              <button type="button" className="btn">
-                One-click buy
-              </button>
-`,
-    );
-    src = src.replace(
-      /\s*<FlagCallout\s*\n\s*flagKey="one_click_buy"\s*\n\s*enabled=\{oneClick\.enabled\}\s*\n\s*variation=\{oneClick\.variation\}\s*\n\s*outcome=\{oneClick\.outcome\}\s*\n\s*blockedBy=\{oneClick\.blockedBy\}\s*\n\s*\/>\s*/,
-      "\n",
-    );
-    writeFileSync(checkout, src);
-    changed.push(checkout);
-  }
-
-  // Rebuild datafiles so generated JSON no longer contains the flag
-  spawnSync("pnpm", ["--filter", "@stale-flags/featurevisor", "build"], {
-    cwd: root,
-    stdio: "inherit",
-    shell: process.platform === "win32",
-  });
-
-  return changed;
+function findReferenceFiles(flagKey: string): string[] {
+  const grep = spawnSync(
+    "rg",
+    ["-l", flagKey, "apps", "packages"],
+    { cwd: root, encoding: "utf8" },
+  );
+  assertRgOk(grep);
+  if (grep.status === 1) return [];
+  return (grep.stdout || "")
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((rel) => path.join(root, rel));
 }
 
 function flagStillReferenced(flagKey: string): string {
@@ -205,71 +146,490 @@ function flagStillReferenced(flagKey: string): string {
       flagKey,
       "apps",
       "packages",
-      "featurevisor/features",
-      "featurevisor/tests",
-      "featurevisor/attributes",
-      "featurevisor/targets",
+      "featurevisor",
+      "-g",
+      "!datafiles/**",
     ],
     { cwd: root, encoding: "utf8" },
   );
+  assertRgOk(grep);
+  // status 1 = no matches (clean), 0 = matches found
+  if (grep.status === 1) return "";
   return (grep.stdout || "").trim();
 }
 
+function listDirtyPaths(): string[] {
+  const tracked = runCaptured("git", ["diff", "--name-only"]);
+  const untracked = runCaptured("git", [
+    "ls-files",
+    "--others",
+    "--exclude-standard",
+  ]);
+  const lines = `${tracked.log}\n${untracked.log}`
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return [...new Set(lines)];
+}
+
 function securityCheck(changed: string[]): { ok: boolean; detail: string } {
-  const allowed = ["apps/", "packages/", "featurevisor/"];
-  const denied = ["tinybird/", "agent/", "infra/", "tools/"];
+  const allowedPrefixes = [
+    "apps/web/src/",
+    "featurevisor/features/",
+    "featurevisor/tests/features/",
+    "featurevisor/.featurevisor/",
+  ];
+  const denied = ["tinybird/", "agent/", "infra/", "tools/", ".github/"];
   for (const f of changed) {
-    const rel = path.relative(root, f).replace(/\\/g, "/");
+    const rel = f.replace(/\\/g, "/");
     if (denied.some((d) => rel.startsWith(d))) {
       return { ok: false, detail: `denied path ${rel}` };
     }
-    if (!allowed.some((a) => rel.startsWith(a))) {
+    if (!allowedPrefixes.some((a) => rel.startsWith(a))) {
       return { ok: false, detail: `path not allowlisted ${rel}` };
     }
   }
   return { ok: true, detail: "allowlist ok" };
 }
 
-function run(cmd: string, args: string[]): boolean {
-  const r = spawnSync(cmd, args, {
-    cwd: root,
-    stdio: "inherit",
-    shell: process.platform === "win32",
+function lineCount(src: string): number {
+  return src.split("\n").length;
+}
+
+function maxLineDelta(
+  originals: Map<string, string>,
+): { ok: boolean; detail: string } {
+  for (const [file, original] of originals) {
+    if (!existsSync(file)) {
+      // YAML deletes are expected and tracked separately
+      if (file.includes("featurevisor/")) continue;
+      return { ok: false, detail: `file deleted ${path.relative(root, file)}` };
+    }
+    const current = readFileSync(file, "utf8");
+    const before = lineCount(original);
+    const after = lineCount(current);
+    if (before > 0 && after / before < 1 - MAX_LINE_DELTA) {
+      return {
+        ok: false,
+        detail: `${path.relative(root, file)} shrank from ${before} to ${after} lines (>${Math.round(MAX_LINE_DELTA * 100)}% deletion)`,
+      };
+    }
+  }
+  return { ok: true, detail: "delta ok" };
+}
+
+function deleteYaml(flagKey: string): string[] {
+  const changed: string[] = [];
+  const feature = path.join(root, "featurevisor/features", `${flagKey}.yml`);
+  const test = path.join(
+    root,
+    "featurevisor/tests/features",
+    `${flagKey}.spec.yml`,
+  );
+  if (existsSync(feature)) {
+    unlinkSync(feature);
+    changed.push(path.relative(root, feature));
+  }
+  if (existsSync(test)) {
+    unlinkSync(test);
+    changed.push(path.relative(root, test));
+  }
+  return changed;
+}
+
+function extractCodeBlock(text: string): string | null {
+  const fence = text.match(/```(?:tsx|ts|jsx|js|typescript|javascript)?\n([\s\S]*?)```/);
+  if (fence?.[1]) return fence[1].replace(/\n$/, "");
+  // Whole response is the file
+  if (text.includes("export ") || text.includes("import ")) {
+    return text.trim();
+  }
+  return null;
+}
+
+function bedrockModelId(): string {
+  return (
+    process.env.BEDROCK_MODEL_ID ??
+    "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+  );
+}
+
+async function converseEdit(opts: {
+  flagKey: string;
+  collapse: Payload["collapse_direction"];
+  targetValue: string;
+  files: Array<{ path: string; content: string }>;
+  lastError: string;
+  attempt: number;
+}): Promise<Array<{ path: string; content: string }>> {
+  const region = process.env.AWS_REGION ?? process.env.AWS_REGION_NAME ?? "us-east-1";
+  const client = new BedrockRuntimeClient({
+    region,
+    requestHandler: undefined,
   });
-  return r.status === 0;
+
+  const fileBlocks = opts.files
+    .map(
+      (f) =>
+        `### FILE: ${f.path}\n\`\`\`tsx\n${f.content}\n\`\`\``,
+    )
+    .join("\n\n");
+
+  const system = `You are a precise TypeScript/React code editor removing a Featurevisor feature flag.
+Rules:
+- Remove every reference to flag_key "${opts.flagKey}" (useFlag("${opts.flagKey}"), FlagCallout with that flagKey, string literals of the key).
+- collapse_direction=${opts.collapse}. target_value=${opts.targetValue}.
+  - keep_gated_branch: keep the enabled/true branch of conditionals; delete the disabled/false branch and the flag plumbing.
+  - delete_gated_branch: keep the disabled/false branch (or remove gated UI entirely if it only renders when enabled); delete the enabled branch and flag plumbing.
+- Remove unused imports (FlagCallout, useFlag) ONLY when no other flag in that file still needs them.
+- Do NOT modify other flags in the same file.
+- Do NOT invent new features, comments, or rewrite unrelated code.
+- Return ONE fenced code block per file, each preceded by a line: ### FILE: <relative/path>
+- Output nothing else.`;
+
+  const userText =
+    opts.attempt === 1
+      ? `Edit these files to remove flag ${opts.flagKey}.\n\n${fileBlocks}`
+      : `Previous edit failed gates (attempt ${opts.attempt}/${MAX_ATTEMPTS}). Fix the CURRENT file contents below using this compiler/rg error:\n\n${opts.lastError}\n\nCurrent files:\n\n${fileBlocks}`;
+
+  const messages: Message[] = [
+    { role: "user", content: [{ text: userText }] },
+  ];
+
+  const cmd = new ConverseCommand({
+    modelId: bedrockModelId(),
+    system: [{ text: system }],
+    messages,
+    inferenceConfig: { maxTokens: 8192, temperature: 0 },
+  });
+
+  const res = await client.send(cmd);
+  const text = (res.output?.message?.content ?? [])
+    .map((c) => ("text" in c && c.text ? c.text : ""))
+    .join("\n");
+
+  const edits: Array<{ path: string; content: string }> = [];
+  const parts = text.split(/^### FILE:\s*/m).filter(Boolean);
+  for (const part of parts) {
+    const nl = part.indexOf("\n");
+    const rel = (nl === -1 ? part : part.slice(0, nl)).trim();
+    const body = nl === -1 ? "" : part.slice(nl + 1);
+    const code = extractCodeBlock(body);
+    if (!rel || !code) continue;
+    const abs = path.isAbsolute(rel) ? rel : path.join(root, rel);
+    edits.push({ path: abs, content: code });
+  }
+
+  if (edits.length === 0 && opts.files.length === 1) {
+    const code = extractCodeBlock(text);
+    if (code) edits.push({ path: opts.files[0]!.path, content: code });
+  }
+
+  if (edits.length === 0) {
+    throw new Error(
+      `Bedrock returned no file edits. Raw response head: ${text.slice(0, 400)}`,
+    );
+  }
+  return edits;
+}
+
+/** Deterministic fallback when Bedrock is unavailable (local demos). */
+function applyHeuristicEdits(
+  payload: Payload,
+  files: string[],
+): void {
+  for (const file of files) {
+    let src = readFileSync(file, "utf8");
+    const key = payload.flag_key;
+    if (payload.collapse_direction === "delete_gated_branch") {
+      // Drop useFlag line, FlagCallout block, and simple enabled ternaries for this flag
+      src = src.replace(
+        new RegExp(
+          `\\s*const\\s+\\w+\\s*=\\s*useFlag\\("${key}"\\);\\n`,
+          "g",
+        ),
+        "\n",
+      );
+      src = src.replace(
+        new RegExp(
+          `\\s*\\{[\\w.]+\\.enabled\\s*\\?\\s*\\([\\s\\S]*?\\)\\s*:\\s*null\\}\\s*`,
+          "g",
+        ),
+        "\n",
+      );
+      src = src.replace(
+        new RegExp(
+          `\\s*<FlagCallout[\\s\\S]*?flagKey="${key}"[\\s\\S]*?/>\\s*`,
+          "g",
+        ),
+        "\n",
+      );
+      // If Listing became import-only unused, strip FlagCallout/useFlag imports when unused
+      if (!src.includes("useFlag(") && !src.includes("<FlagCallout")) {
+        src = src.replace(
+          /import\s*\{\s*FlagCallout\s*\}\s*from\s*["'][^"']+["'];\n?/,
+          "",
+        );
+        src = src.replace(
+          /import\s*\{\s*useFlag\s*\}\s*from\s*["'][^"']+["'];\n?/,
+          "",
+        );
+      }
+    } else if (payload.collapse_direction === "keep_gated_branch") {
+      const varMatch = src.match(
+        new RegExp(`const\\s+(\\w+)\\s*=\\s*useFlag\\("${key}"\\);`),
+      );
+      const varName = varMatch?.[1];
+      if (varName) {
+        src = src.replace(
+          new RegExp(`\\s*const\\s+${varName}\\s*=\\s*useFlag\\("${key}"\\);\\n`),
+          "\n",
+        );
+        // Keep enabled branch of ternary: {var.enabled ? (A) : (B)} -> A
+        src = src.replace(
+          new RegExp(
+            `\\{${varName}\\.enabled\\s*\\?\\s*\\(([\\s\\S]*?)\\)\\s*:\\s*\\([\\s\\S]*?\\)\\}`,
+          ),
+          "$1",
+        );
+        src = src.replace(
+          new RegExp(
+            `\\s*<FlagCallout[\\s\\S]*?flagKey="${key}"[\\s\\S]*?/>\\s*`,
+          ),
+          "\n",
+        );
+        if (!src.includes("useFlag(") && !src.includes("<FlagCallout")) {
+          src = src.replace(
+            /import\s*\{\s*FlagCallout\s*\}\s*from\s*["'][^"']+["'];\n?/,
+            "",
+          );
+          src = src.replace(
+            /import\s*\{\s*useFlag\s*\}\s*from\s*["'][^"']+["'];\n?/,
+            "",
+          );
+        } else if (!src.includes("<FlagCallout")) {
+          src = src.replace(
+            /import\s*\{\s*FlagCallout\s*\}\s*from\s*["'][^"']+["'];\n?/,
+            "",
+          );
+        }
+      }
+    }
+    writeFileSync(file, src);
+  }
+}
+
+async function editLoop(payload: Payload, files: string[]): Promise<{
+  ok: boolean;
+  gateLog: string;
+}> {
+  const originals = new Map(
+    files.filter((f) => existsSync(f)).map((f) => [f, readFileSync(f, "utf8")]),
+  );
+  let gateLog = "";
+  const useBedrock = process.env.BEDROCK_DISABLED !== "1";
+  let usedHeuristic = false;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    console.log(`Surgeon edit attempt ${attempt}/${MAX_ATTEMPTS}`);
+    try {
+      if (useBedrock && !usedHeuristic) {
+        const current = files
+          .filter((f) => existsSync(f))
+          .map((f) => ({
+            path: path.relative(root, f),
+            content: readFileSync(f, "utf8"),
+          }));
+        const edits = await converseEdit({
+          flagKey: payload.flag_key,
+          collapse: payload.collapse_direction,
+          targetValue: payload.target_value,
+          files: current,
+          lastError: gateLog,
+          attempt,
+        });
+        const allowed = new Set(files.map((f) => path.resolve(f)));
+        for (const e of edits) {
+          const abs = path.resolve(
+            path.isAbsolute(e.path) ? e.path : path.join(root, e.path),
+          );
+          if (!allowed.has(abs)) {
+            gateLog = `rewound: model tried to edit non-target file ${path.relative(root, abs)}`;
+            for (const [f, src] of originals) writeFileSync(f, src);
+            throw new Error(gateLog);
+          }
+          writeFileSync(abs, e.content);
+        }
+      } else {
+        applyHeuristicEdits(payload, files);
+      }
+    } catch (err) {
+      gateLog = err instanceof Error ? err.message : String(err);
+      console.warn(`Edit attempt ${attempt} model error: ${gateLog}`);
+      if (!usedHeuristic && attempt === 1) {
+        console.warn("Falling back to heuristic edits");
+        usedHeuristic = true;
+        applyHeuristicEdits(payload, files);
+      } else {
+        continue;
+      }
+    }
+
+    const delta = maxLineDelta(originals);
+    if (!delta.ok) {
+      for (const [f, src] of originals) writeFileSync(f, src);
+      gateLog = `rewind: ${delta.detail}. Apply a minimal diff.`;
+      continue;
+    }
+
+    const dirty = listDirtyPaths();
+    const sec = securityCheck(dirty);
+    if (!sec.ok) {
+      for (const [f, src] of originals) writeFileSync(f, src);
+      gateLog = `rewind: ${sec.detail}`;
+      // Guardrail breach: stop immediately
+      return { ok: false, gateLog };
+    }
+
+    const fvBuild = runCaptured("pnpm", [
+      "--filter",
+      "@stale-flags/featurevisor",
+      "build",
+    ]);
+    const leftover = flagStillReferenced(payload.flag_key);
+    const tsc = runCaptured("pnpm", [
+      "--filter",
+      "@stale-flags/web",
+      "typecheck",
+    ]);
+    const vite = runCaptured("pnpm", [
+      "--filter",
+      "@stale-flags/web",
+      "build",
+    ]);
+    const fvLint = runCaptured("pnpm", [
+      "--filter",
+      "@stale-flags/featurevisor",
+      "lint",
+    ]);
+    const fvTest = runCaptured("pnpm", [
+      "--filter",
+      "@stale-flags/featurevisor",
+      "test",
+    ]);
+
+    if (leftover) {
+      gateLog = `Flag key still referenced:\n${leftover}`;
+      continue;
+    }
+    if (!fvBuild.ok || !tsc.ok || !vite.ok || !fvLint.ok || !fvTest.ok) {
+      gateLog = [
+        !fvBuild.ok ? `featurevisor build:\n${fvBuild.log}` : "",
+        !tsc.ok ? `tsc:\n${tsc.log}` : "",
+        !vite.ok ? `vite build:\n${vite.log}` : "",
+        !fvLint.ok ? `featurevisor lint:\n${fvLint.log}` : "",
+        !fvTest.ok ? `featurevisor test:\n${fvTest.log}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      continue;
+    }
+
+    return { ok: true, gateLog: "gates passed" };
+  }
+
+  return { ok: false, gateLog: gateLog || "exhausted attempts" };
+}
+
+async function ensurePr(opts: {
+  repo: string;
+  demoBranch: string;
+  workBranch: string;
+  title: string;
+  body: string;
+}): Promise<string> {
+  const env = { ...process.env, GH_TOKEN: process.env.GITHUB_TOKEN };
+  const existing = spawnSync(
+    "gh",
+    [
+      "pr",
+      "list",
+      "--repo",
+      opts.repo,
+      "--head",
+      opts.workBranch,
+      "--base",
+      opts.demoBranch,
+      "--json",
+      "url",
+      "--jq",
+      ".[0].url // empty",
+    ],
+    { cwd: root, encoding: "utf8", env },
+  );
+  const url = (existing.stdout || "").trim();
+  if (url) {
+    console.log(`Reusing existing PR ${url}`);
+    return url;
+  }
+  const created = spawnSync(
+    "gh",
+    [
+      "pr",
+      "create",
+      "--repo",
+      opts.repo,
+      "--base",
+      opts.demoBranch,
+      "--head",
+      opts.workBranch,
+      "--title",
+      opts.title,
+      "--body",
+      opts.body,
+    ],
+    { cwd: root, encoding: "utf8", env },
+  );
+  if (created.status !== 0) {
+    throw new Error(
+      `gh pr create failed: ${created.stderr || created.stdout}`,
+    );
+  }
+  return (created.stdout || "").trim();
 }
 
 async function main(): Promise<void> {
   const argv = process.argv.filter((a) => a !== "--");
   const dryRun = argv.includes("--dry-run");
   const payload = parsePayload();
+  assertFlagKey(payload.flag_key);
   if (payload.collapse_direction === "none") {
     throw new Error("Refusing collapse_direction=none");
   }
 
+  const demoBranch = process.env.DEMO_BRANCH ?? "demo";
+  const workBranch = `agent/remove-${payload.flag_key}`;
   console.log(
     `Surgeon ${payload.flag_key} collapse=${payload.collapse_direction} dryRun=${dryRun}`,
   );
 
   if (dryRun) {
-    console.log("Would remove:");
+    const files = findReferenceFiles(payload.flag_key);
+    console.log("Would remove YAML + edit:");
     console.log(`  featurevisor/features/${payload.flag_key}.yml`);
     console.log(`  featurevisor/tests/features/${payload.flag_key}.spec.yml`);
-    console.log(`  collapse call sites in apps/web (${payload.collapse_direction})`);
+    for (const f of files) console.log(`  ${path.relative(root, f)}`);
     console.log("\n--- PR body preview ---\n");
-    console.log(await ollamaPrBody(payload, "dry-run"));
+    console.log(fallbackBody(payload));
     return;
   }
 
-  const demoBranch = process.env.DEMO_BRANCH ?? "demo";
-  const workBranch = `agent/remove-${payload.flag_key}`;
   const restore = (): void => {
     run("git", ["reset", "--hard", "HEAD"]);
-    run("git", ["checkout", "main"]);
-    run("git", ["clean", "-fd", "featurevisor/datafiles"]);
+    run("git", ["clean", "-fd"]);
+    run("git", ["checkout", demoBranch]);
   };
 
-  // Fresh branch from demo so each PR is isolated
   if (process.env.GITHUB_TOKEN) {
     if (!run("git", ["fetch", "origin", demoBranch])) {
       throw new Error(`git fetch origin ${demoBranch} failed`);
@@ -285,56 +645,75 @@ async function main(): Promise<void> {
     }
   }
 
-  const changed = applyEdits(payload);
-  const leftover = flagStillReferenced(payload.flag_key);
-  if (leftover) {
-    console.error("Flag key still referenced:\n", leftover);
+  deleteYaml(payload.flag_key);
+  let files: string[] = [];
+  try {
+    files = findReferenceFiles(payload.flag_key);
+  } catch (err) {
     await appendDecisions([
       {
-        decided_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+        decided_at: new Date().toISOString(),
         run_id: payload.run_id,
         flag_key: payload.flag_key,
         verdict: "failed",
-        reason: "flag key still present after edit",
-        evidence: JSON.stringify({ grep: leftover }),
-        pr_url: "",
-      },
-    ]);
-    restore();
-    process.exit(1);
-  }
-
-  const sec = securityCheck(changed);
-  const validationOk =
-    run("pnpm", ["--filter", "@stale-flags/web", "typecheck"]) &&
-    run("pnpm", ["--filter", "@stale-flags/web", "build"]) &&
-    run("pnpm", ["--filter", "@stale-flags/featurevisor", "lint"]) &&
-    run("pnpm", ["--filter", "@stale-flags/featurevisor", "test"]);
-
-  if (!validationOk || !sec.ok) {
-    await appendDecisions([
-      {
-        decided_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
-        run_id: payload.run_id,
-        flag_key: payload.flag_key,
-        verdict: "failed",
-        reason: `validation/security gates failed: ${sec.detail}`,
+        route: "surgeon_guardrail_breach",
+        reason: err instanceof Error ? err.message : String(err),
         evidence: JSON.stringify(payload.evidence),
         pr_url: "",
+        datafile_revision: payload.datafile_revision ?? "",
+      },
+    ]);
+    restore();
+    throw err;
+  }
+  if (files.length === 0) {
+    console.log("No app/package call sites found; YAML-only removal");
+  }
+
+  const { ok, gateLog } = await editLoop(payload, files);
+  if (!ok) {
+    await appendDecisions([
+      {
+        decided_at: new Date().toISOString(),
+        run_id: payload.run_id,
+        flag_key: payload.flag_key,
+        verdict: "failed",
+        route: gateLog.startsWith("rewind: denied") ||
+          gateLog.startsWith("rewind: path")
+          ? "surgeon_guardrail_breach"
+          : "surgeon_gate_exhausted",
+        reason: gateLog.slice(0, 4000),
+        evidence: JSON.stringify({
+          ...payload.evidence,
+          attempts: MAX_ATTEMPTS,
+        }),
+        pr_url: "",
+        datafile_revision: payload.datafile_revision ?? "",
       },
     ]);
     restore();
     process.exit(1);
   }
 
-  const body = await ollamaPrBody(payload, changed.join(", "));
+  const body = fallbackBody(payload);
   mkdirSync(path.join(root, ".local-data"), { recursive: true });
   const localPr = path.join(root, `.local-data/pr-${payload.flag_key}.md`);
   writeFileSync(localPr, body);
 
   let prUrl = `file://.local-data/pr-${payload.flag_key}.md`;
   if (process.env.GITHUB_TOKEN) {
-    run("git", ["add", "apps", "featurevisor"]);
+    const dirty = listDirtyPaths().filter(
+      (p) =>
+        p.startsWith("apps/") ||
+        p.startsWith("featurevisor/features/") ||
+        p.startsWith("featurevisor/tests/") ||
+        p.startsWith("featurevisor/.featurevisor/"),
+    );
+    if (dirty.length === 0) {
+      restore();
+      throw new Error("No staged changes after successful gates");
+    }
+    run("git", ["add", ...dirty]);
     if (
       !run("git", [
         "commit",
@@ -349,48 +728,36 @@ async function main(): Promise<void> {
       restore();
       throw new Error("git push failed");
     }
-    const prEnv = {
-      ...process.env,
-      GH_TOKEN: process.env.GITHUB_TOKEN,
-    };
-    const pr = spawnSync(
-      "gh",
-      [
-        "pr",
-        "create",
-        "--repo",
-        process.env.GITHUB_REPO ?? "lucamezzalira/stale-flag-cleanup",
-        "--base",
+    try {
+      prUrl = await ensurePr({
+        repo: process.env.GITHUB_REPO ?? "lucamezzalira/stale-flag-cleanup",
         demoBranch,
-        "--head",
         workBranch,
-        "--title",
-        `Remove feature flag ${payload.flag_key}`,
-        "--body",
+        title: `Remove feature flag ${payload.flag_key}`,
         body,
-      ],
-      { cwd: root, encoding: "utf8", env: prEnv },
-    );
-    if (pr.status !== 0) {
-      console.error(pr.stderr || pr.stdout);
-      restore();
-      throw new Error("gh pr create failed");
+      });
+    } catch (err) {
+      console.error(err);
+      // Branch is already pushed; do not hard-reset remote. Just leave local on demo.
+      run("git", ["checkout", demoBranch]);
+      throw err;
     }
-    prUrl = (pr.stdout || "").trim() || prUrl;
-    run("git", ["checkout", "main"]);
+    run("git", ["checkout", demoBranch]);
   } else {
     console.log(`No GITHUB_TOKEN — wrote ${localPr}`);
   }
 
   await appendDecisions([
     {
-      decided_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+      decided_at: new Date().toISOString(),
       run_id: payload.run_id,
       flag_key: payload.flag_key,
       verdict: "safe_to_remove",
+      route: payload.route ?? "lifecycle",
       reason: payload.reason,
       evidence: JSON.stringify(payload.evidence),
       pr_url: prUrl,
+      datafile_revision: payload.datafile_revision ?? "",
     },
   ]);
   console.log(prUrl);

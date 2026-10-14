@@ -1,0 +1,96 @@
+name: publish-flags
+
+on:
+  push:
+    branches: [main, demo]
+    paths:
+      - "featurevisor/**"
+      - "apps/web/**"
+      - "tools/publish-defs/**"
+      - "tools/publish-datafile/**"
+      - ".github/workflows/publish-flags.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Configure AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GHA_PUBLISH_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve stack outputs
+        id: stack
+        run: |
+          OUT=$(aws cloudformation describe-stacks --stack-name StaleFlagsStack --region "$AWS_REGION" \
+            --query 'Stacks[0].Outputs' --output json)
+          echo "web_bucket=$(node -e "const o=JSON.parse(process.argv[1]); console.log(o.find(x=>x.OutputKey==='WebBucketName').OutputValue)" "$OUT")" >> "$GITHUB_OUTPUT"
+          echo "data_bucket=$(node -e "const o=JSON.parse(process.argv[1]); console.log(o.find(x=>x.OutputKey==='DatafileBucketName').OutputValue)" "$OUT")" >> "$GITHUB_OUTPUT"
+          echo "data_cf=$(node -e "const o=JSON.parse(process.argv[1]); console.log(o.find(x=>x.OutputKey==='DatafileCloudFrontDomain').OutputValue)" "$OUT")" >> "$GITHUB_OUTPUT"
+          echo "data_dist=$(node -e "const o=JSON.parse(process.argv[1]); console.log(o.find(x=>x.OutputKey==='DatafileDistributionId').OutputValue)" "$OUT")" >> "$GITHUB_OUTPUT"
+          echo "web_dist=$(node -e "const o=JSON.parse(process.argv[1]); console.log(o.find(x=>x.OutputKey==='WebDistributionId').OutputValue)" "$OUT")" >> "$GITHUB_OUTPUT"
+
+      - name: Build Featurevisor datafile
+        run: pnpm datafile:build
+
+      - name: Upload datafile
+        run: |
+          aws s3 sync featurevisor/datafiles/ "s3://${{ steps.stack.outputs.data_bucket }}/featurevisor/" \
+            --region "$AWS_REGION" \
+            --cache-control "max-age=60" \
+            --exclude "*" --include "*.json"
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ steps.stack.outputs.data_dist }}" \
+            --paths "/featurevisor/*"
+
+      - name: Build web
+        env:
+          VITE_DATAFILE_URL: https://${{ steps.stack.outputs.data_cf }}/featurevisor/production/featurevisor-all.json
+          VITE_TINYBIRD_API_HOST: ${{ secrets.TINYBIRD_API_HOST }}
+          VITE_TINYBIRD_APPEND_TOKEN: ${{ secrets.TINYBIRD_APPEND_TOKEN }}
+        run: pnpm --filter @stale-flags/web build
+
+      - name: Upload web
+        run: |
+          aws s3 sync apps/web/dist/ "s3://${{ steps.stack.outputs.web_bucket }}/" \
+            --region "$AWS_REGION" \
+            --delete \
+            --cache-control "max-age=60"
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ steps.stack.outputs.web_dist }}" \
+            --paths "/*"
+
+      - name: Publish flag definitions to Tinybird
+        env:
+          TINYBIRD_API_HOST: ${{ secrets.TINYBIRD_API_HOST }}
+          TINYBIRD_APPEND_TOKEN: ${{ secrets.TINYBIRD_APPEND_TOKEN }}
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_TOKEN }}
+        run: |
+          if [[ -z "${TINYBIRD_APPEND_TOKEN}" ]]; then
+            echo "TINYBIRD_APPEND_TOKEN secret not set; skipping publish-defs"
+            exit 0
+          fi
+          pnpm publish-defs

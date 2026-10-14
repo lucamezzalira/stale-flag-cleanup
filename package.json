@@ -24,7 +24,9 @@
     "infra:sync": "bash infra/scripts/sync-assets.sh",
     "infra:secrets": "bash infra/scripts/put-secrets.sh",
     "infra:agent-run": "aws codebuild start-build --project-name stale-flags-agent --region us-east-1 --query 'build.id' --output text",
+    "qa:agent": "echo \"Follow docs/qa-agent.md and write a canvas under ~/.cursor/projects/Users-lucamezzalira-Documents-tinybird/canvases/qa-run-<stamp>.canvas.tsx\"",
     "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm --filter @stale-flags/verdicts test",
     "lint:flags": "pnpm --filter @stale-flags/featurevisor lint",
     "test:flags": "pnpm --filter @stale-flags/featurevisor test"
   },

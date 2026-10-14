@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@stale-flags/local-store": "workspace:*",
     "tsx": "^4.20.5"
   },
   "devDependencies": {

@@ -1,5 +1,5 @@
 TOKEN endpoint_read READ
-DESCRIPTION Candidate flags for removal via lifecycle, abandoned, or settled routes
+DESCRIPTION Candidate flags for removal via lifecycle, abandoned, or settled routes (all non-archived; age by first_captured_at)
 
 NODE latest_defs
 SQL >
@@ -12,7 +12,9 @@ SQL >
         argMax(variation_count, captured_at) AS variation_count,
         argMax(deprecated, captured_at) AS deprecated,
         argMax(archived, captured_at) AS archived,
-        max(captured_at) AS last_captured_at
+        argMax(datafile_revision, captured_at) AS datafile_revision,
+        max(captured_at) AS last_captured_at,
+        min(captured_at) AS first_captured_at
     FROM flag_definitions
     WHERE environment = {{ String(environment, 'production') }}
     GROUP BY flag_key
@@ -27,25 +29,47 @@ SQL >
         uniqExactIf(variation, outcome = 'evaluated' AND variation != '') AS distinct_variations,
         max(day) AS last_day
     FROM flag_daily_activity
-    WHERE day >= today() - {{ Int32(window_days, 90) }}
+    WHERE day >= toDate(now() - toIntervalDay({{ Int32(window_days, 90) }}))
       AND app = 'web'
     GROUP BY flag_key
+
+NODE level1_descendants
+SQL >
+    SELECT
+        d.parent_key AS ancestor_key,
+        d.flag_key AS descendant
+    FROM latest_defs AS d
+    WHERE d.parent_key != '' AND d.archived = 0
+
+NODE level2_descendants
+SQL >
+    SELECT
+        l1.ancestor_key AS ancestor_key,
+        child.flag_key AS descendant
+    FROM level1_descendants l1
+    INNER JOIN latest_defs AS child
+        ON child.parent_key = l1.descendant AND child.archived = 0
 
 NODE descendants
 SQL >
     SELECT
-        parent_key AS flag_key,
-        count() AS descendant_count
-    FROM latest_defs
-    WHERE parent_key != '' AND archived = 0
-    GROUP BY parent_key
+        ancestor_key AS flag_key,
+        length(groupUniqArray(descendant)) AS descendant_count
+    FROM (
+        SELECT ancestor_key, descendant FROM level1_descendants
+        UNION ALL
+        SELECT ancestor_key, descendant FROM level2_descendants
+    )
+    GROUP BY ancestor_key
 
 NODE last_decisions
 SQL >
     SELECT
         flag_key,
-        argMax(verdict, decided_at) AS last_verdict,
-        argMax(pr_url, decided_at) AS last_pr_url
+        argMax(verdict, (decided_at, if(pr_url != '' OR verdict = 'failed', 1, 0))) AS last_verdict,
+        argMax(pr_url, (decided_at, if(pr_url != '', 1, 0))) AS last_pr_url,
+        argMax(datafile_revision, decided_at) AS last_datafile_revision,
+        argMax(route, decided_at) AS last_route
     FROM cleanup_decision_log
     GROUP BY flag_key
 
@@ -53,11 +77,20 @@ NODE endpoint
 SQL >
     %
     SELECT
-        d.flag_key,
+        d.flag_key AS flag_key,
         multiIf(
             d.deprecated = 1 OR d.archived = 1, 'lifecycle',
-            coalesce(a.evaluated_events, 0) = 0, 'abandoned',
-            'settled'
+            (
+              coalesce(a.evaluated_events, 0) >= {{ Int32(min_events_for_settled, 1000) }}
+              AND coalesce(a.distinct_variations, 0) = 1
+              AND d.rollout_percentage IN (0, 100)
+            )
+            OR (
+              d.variation_count > 1
+              AND d.rollout_percentage > 0
+              AND d.rollout_percentage < 100
+            ), 'settled',
+            'abandoned'
         ) AS route,
         if(a.last_day = toDate(0), CAST(NULL AS Nullable(DateTime)), toDateTime(a.last_day)) AS last_evaluated_at,
         coalesce(a.evaluated_events, 0) AS evaluated_events,
@@ -65,23 +98,21 @@ SQL >
         coalesce(a.distinct_variations, 0) AS distinct_variations,
         d.parent_key,
         coalesce(de.descendant_count, 0) AS descendant_count,
+        d.datafile_revision,
+        d.target_value,
+        d.rollout_percentage,
         ld.last_verdict,
-        ld.last_pr_url
+        ld.last_pr_url,
+        ld.last_datafile_revision,
+        ld.last_route
     FROM latest_defs d
     LEFT JOIN activity a ON d.flag_key = a.flag_key
     LEFT JOIN descendants de ON d.flag_key = de.flag_key
     LEFT JOIN last_decisions ld ON d.flag_key = ld.flag_key
     WHERE d.archived = 0
-      AND d.last_captured_at < now() - toIntervalDay({{ Int32(window_days, 90) }})
       AND (
         d.deprecated = 1
-        OR d.archived = 1
-        OR coalesce(a.evaluated_events, 0) = 0
-        OR (
-          coalesce(a.evaluated_events, 0) >= {{ Int32(min_events_for_settled, 1000) }}
-          AND coalesce(a.distinct_variations, 0) = 1
-          AND d.rollout_percentage IN (0, 100)
-        )
+        OR d.first_captured_at < now() - toIntervalDay({{ Int32(window_days, 90) }})
       )
     ORDER BY d.flag_key
 

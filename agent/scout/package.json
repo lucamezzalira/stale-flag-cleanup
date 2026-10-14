@@ -10,6 +10,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
     "@stale-flags/local-store": "workspace:*",
     "@stale-flags/verdicts": "workspace:*",
     "tsx": "^4.20.5"

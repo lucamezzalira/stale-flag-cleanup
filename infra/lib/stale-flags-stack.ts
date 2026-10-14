@@ -10,6 +10,8 @@ import * as codebuild from "aws-cdk-lib/aws-codebuild";
 import * as scheduler from "aws-cdk-lib/aws-scheduler";
 import * as schedulerTargets from "aws-cdk-lib/aws-scheduler-targets";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as iamOidc from "aws-cdk-lib/aws-iam";
+
 export class StaleFlagsStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
@@ -17,20 +19,22 @@ export class StaleFlagsStack extends cdk.Stack {
     const githubRepo =
       this.node.tryGetContext("githubRepo") ?? "lucamezzalira/stale-flag-cleanup";
 
-    // --- Secrets (fill values after deploy; never commit them) ---
+    // Initial placeholder only on create. Never set secretObjectValue — that
+    // overwrites live tokens on every cdk deploy. put-secrets.sh is the writer.
     const agentSecrets = new secretsmanager.Secret(this, "AgentSecrets", {
       secretName: "stale-flags/agent",
       description: "GitHub + Tinybird tokens for scheduled scout/surgeon",
-      secretObjectValue: {
-        GITHUB_TOKEN: cdk.SecretValue.unsafePlainText("REPLACE_ME"),
-        GITHUB_REPO: cdk.SecretValue.unsafePlainText(githubRepo),
-        DEMO_BRANCH: cdk.SecretValue.unsafePlainText("demo"),
-        TINYBIRD_API_HOST: cdk.SecretValue.unsafePlainText(
-          "https://api.us-east.aws.tinybird.co",
-        ),
-        TINYBIRD_APPEND_TOKEN: cdk.SecretValue.unsafePlainText("REPLACE_ME"),
-        TINYBIRD_TOKEN: cdk.SecretValue.unsafePlainText("REPLACE_ME"),
-        OLLAMA_DISABLED: cdk.SecretValue.unsafePlainText("1"),
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({
+          GITHUB_TOKEN: "REPLACE_ME",
+          GITHUB_REPO: githubRepo,
+          DEMO_BRANCH: "demo",
+          TINYBIRD_API_HOST: "https://api.us-east.aws.tinybird.co",
+          TINYBIRD_APPEND_TOKEN: "REPLACE_ME",
+          TINYBIRD_TOKEN: "REPLACE_ME",
+        }),
+        generateStringKey: "_cdk_placeholder",
       },
     });
 
@@ -51,10 +55,6 @@ export class StaleFlagsStack extends cdk.Stack {
       ],
     });
 
-    const datafileOai = new cloudfront.OriginAccessIdentity(this, "DatafileOai");
-    datafileBucket.grantRead(datafileOai);
-
-    // Browser fetch from the web CloudFront origin needs CORS on the datafile CDN
     const datafileCors = new cloudfront.ResponseHeadersPolicy(this, "DatafileCors", {
       comment: "Allow SPA to fetch Featurevisor datafiles",
       corsBehavior: {
@@ -66,14 +66,24 @@ export class StaleFlagsStack extends cdk.Stack {
       },
     });
 
+    const datafileCachePolicy = new cloudfront.CachePolicy(this, "DatafileCache", {
+      comment: "Short TTL for feature flag datafiles",
+      defaultTtl: cdk.Duration.seconds(60),
+      minTtl: cdk.Duration.seconds(0),
+      maxTtl: cdk.Duration.seconds(60),
+      cookieBehavior: cloudfront.CacheCookieBehavior.none(),
+      headerBehavior: cloudfront.CacheHeaderBehavior.none(),
+      queryStringBehavior: cloudfront.CacheQueryStringBehavior.none(),
+      enableAcceptEncodingGzip: true,
+      enableAcceptEncodingBrotli: true,
+    });
+
     const datafileDist = new cloudfront.Distribution(this, "DatafileDistribution", {
       comment: "Featurevisor datafiles",
       defaultBehavior: {
-        origin: origins.S3BucketOrigin.withOriginAccessIdentity(datafileBucket, {
-          originAccessIdentity: datafileOai,
-        }),
+        origin: origins.S3BucketOrigin.withOriginAccessControl(datafileBucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+        cachePolicy: datafileCachePolicy,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
         responseHeadersPolicy: datafileCors,
       },
@@ -88,16 +98,11 @@ export class StaleFlagsStack extends cdk.Stack {
       autoDeleteObjects: true,
     });
 
-    const webOai = new cloudfront.OriginAccessIdentity(this, "WebOai");
-    webBucket.grantRead(webOai);
-
     const webDist = new cloudfront.Distribution(this, "WebDistribution", {
       comment: "Northline demo shop",
       defaultRootObject: "index.html",
       defaultBehavior: {
-        origin: origins.S3BucketOrigin.withOriginAccessIdentity(webBucket, {
-          originAccessIdentity: webOai,
-        }),
+        origin: origins.S3BucketOrigin.withOriginAccessControl(webBucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
         allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
@@ -118,7 +123,6 @@ export class StaleFlagsStack extends cdk.Stack {
       ],
     });
 
-    // Placeholder index so the distribution is not empty before first sync
     new s3deploy.BucketDeployment(this, "WebPlaceholder", {
       sources: [
         s3deploy.Source.data(
@@ -131,11 +135,13 @@ export class StaleFlagsStack extends cdk.Stack {
       distributionPaths: ["/*"],
     });
 
-    // --- Scheduled agent via CodeBuild (full monorepo + git/gh) ---
+    // --- Scheduled agent via CodeBuild (git/pnpm/rg/Bedrock Converse) ---
     const agentProject = new codebuild.Project(this, "AgentProject", {
       projectName: "stale-flags-agent",
       description: "Nightly scout/surgeon against demo branch",
       timeout: cdk.Duration.hours(1),
+      queuedTimeout: cdk.Duration.hours(2),
+      concurrentBuildLimit: 1,
       environment: {
         buildImage: codebuild.LinuxBuildImage.STANDARD_7_0,
         computeType: codebuild.ComputeType.MEDIUM,
@@ -150,56 +156,87 @@ export class StaleFlagsStack extends cdk.Stack {
         },
       },
       environmentVariables: {
-        AGENT_SECRET_ARN: { value: agentSecrets.secretArn },
         AWS_REGION_NAME: { value: this.region },
-        REPO_URL: {
-          value: `https://github.com/${githubRepo}.git`,
+        REPO_URL: { value: `https://github.com/${githubRepo}.git` },
+        SCOUT_SOURCE: { value: "tinybird" },
+        BEDROCK_MODEL_ID: {
+          value: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        },
+        GITHUB_TOKEN: {
+          type: codebuild.BuildEnvironmentVariableType.SECRETS_MANAGER,
+          value: `${agentSecrets.secretArn}:GITHUB_TOKEN`,
+        },
+        GITHUB_REPO: {
+          type: codebuild.BuildEnvironmentVariableType.SECRETS_MANAGER,
+          value: `${agentSecrets.secretArn}:GITHUB_REPO`,
+        },
+        DEMO_BRANCH: {
+          type: codebuild.BuildEnvironmentVariableType.SECRETS_MANAGER,
+          value: `${agentSecrets.secretArn}:DEMO_BRANCH`,
+        },
+        TINYBIRD_API_HOST: {
+          type: codebuild.BuildEnvironmentVariableType.SECRETS_MANAGER,
+          value: `${agentSecrets.secretArn}:TINYBIRD_API_HOST`,
+        },
+        TINYBIRD_APPEND_TOKEN: {
+          type: codebuild.BuildEnvironmentVariableType.SECRETS_MANAGER,
+          value: `${agentSecrets.secretArn}:TINYBIRD_APPEND_TOKEN`,
+        },
+        TINYBIRD_TOKEN: {
+          type: codebuild.BuildEnvironmentVariableType.SECRETS_MANAGER,
+          value: `${agentSecrets.secretArn}:TINYBIRD_TOKEN`,
         },
       },
       buildSpec: codebuild.BuildSpec.fromObject({
         version: "0.2",
         phases: {
           install: {
-            "runtime-versions": { nodejs: "22" },
+            "runtime-versions": { nodejs: "24" },
             commands: [
               "npm install -g pnpm@10",
-              "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg",
-              'echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list',
-              "apt-get update && apt-get install -y gh",
+              "apt-get update && apt-get install -y ripgrep",
+              'command -v gh >/dev/null || (curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list && apt-get update && apt-get install -y gh)',
             ],
           },
-          pre_build: {
-            commands: [
-              'export SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$AGENT_SECRET_ARN" --query SecretString --output text)',
-              'export GITHUB_TOKEN=$(python3 -c "import json,os; print(json.loads(os.environ[\'SECRET_JSON\'])[\'GITHUB_TOKEN\'])")',
-              'export GITHUB_REPO=$(python3 -c "import json,os; print(json.loads(os.environ[\'SECRET_JSON\'])[\'GITHUB_REPO\'])")',
-              'export DEMO_BRANCH=$(python3 -c "import json,os; print(json.loads(os.environ[\'SECRET_JSON\']).get(\'DEMO_BRANCH\') or \'demo\')")',
-              'export TINYBIRD_API_HOST=$(python3 -c "import json,os; print(json.loads(os.environ[\'SECRET_JSON\'])[\'TINYBIRD_API_HOST\'])")',
-              'export TINYBIRD_APPEND_TOKEN=$(python3 -c "import json,os; print(json.loads(os.environ[\'SECRET_JSON\'])[\'TINYBIRD_APPEND_TOKEN\'])")',
-              'export TINYBIRD_TOKEN=$(python3 -c "import json,os; print(json.loads(os.environ[\'SECRET_JSON\'])[\'TINYBIRD_TOKEN\'])")',
-              'export OLLAMA_DISABLED=$(python3 -c "import json,os; print(json.loads(os.environ[\'SECRET_JSON\']).get(\'OLLAMA_DISABLED\') or \'1\')")',
-              'export GH_TOKEN="$GITHUB_TOKEN"',
-              'git clone --depth 1 "$REPO_URL" app',
-              "cd app && pnpm install --frozen-lockfile",
-              "cd app && pnpm seed",
-            ],
-          },
+          // Clone + install + agent in one BUILD command. CodeBuild may not
+          // keep a PRE_BUILD checkout visible to BUILD (empty primary source),
+          // and /bin/sh rejects pipefail — use set -eu only.
           build: {
-            commands: ["cd app && OLLAMA_DISABLED=1 pnpm agent:run"],
+            commands: [
+              [
+                "set -eu",
+                'export GH_TOKEN="$GITHUB_TOKEN"',
+                "gh auth setup-git",
+                "rm -rf app",
+                'git clone --depth 50 --branch "$DEMO_BRANCH" "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPO}.git" app',
+                "cd app",
+                'echo "branch=$(git rev-parse --abbrev-ref HEAD)"',
+                "git log -1 --oneline",
+                "pnpm install --frozen-lockfile",
+                "SCOUT_SOURCE=tinybird BEDROCK_DISABLED=0 pnpm agent:run",
+              ].join("\n"),
+            ],
           },
         },
       }),
     });
 
     agentSecrets.grantRead(agentProject);
+
     agentProject.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ["secretsmanager:GetSecretValue"],
-        resources: [agentSecrets.secretArn],
+        actions: [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream",
+          "bedrock:GetInferenceProfile",
+        ],
+        resources: [
+          `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/us.anthropic.claude-*`,
+          "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
+        ],
       }),
     );
 
-    // Midnight UTC schedule (article capture). Also startable on demand.
     const schedulerRole = new iam.Role(this, "SchedulerRole", {
       assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com"),
     });
@@ -222,14 +259,63 @@ export class StaleFlagsStack extends cdk.Stack {
       }),
       target: new schedulerTargets.CodeBuildStartBuild(agentProject, {
         role: schedulerRole,
+        retryAttempts: 0,
       }),
     });
+
+    // --- GitHub Actions OIDC for publish-flags.yml ---
+    // Prefer an existing account OIDC provider ARN via context to avoid the
+    // account-global EntityAlreadyExists collision on token.actions.githubusercontent.com.
+    const existingOidcArn = this.node.tryGetContext(
+      "githubOidcProviderArn",
+    ) as string | undefined;
+    const githubProviderArn =
+      existingOidcArn ??
+      new iamOidc.OpenIdConnectProvider(this, "GitHubOidc", {
+        url: "https://token.actions.githubusercontent.com",
+        clientIds: ["sts.amazonaws.com"],
+      }).openIdConnectProviderArn;
+
+    const ghaPublishRole = new iam.Role(this, "GitHubPublishRole", {
+      roleName: "stale-flags-gha-publish",
+      assumedBy: new iam.FederatedPrincipal(
+        githubProviderArn,
+        {
+          StringEquals: {
+            "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          },
+          StringLike: {
+            "token.actions.githubusercontent.com:sub": [
+              `repo:${githubRepo}:ref:refs/heads/main`,
+              `repo:${githubRepo}:ref:refs/heads/demo`,
+            ],
+          },
+        },
+        "sts:AssumeRoleWithWebIdentity",
+      ),
+      description: "GitHub Actions role for datafile + web sync",
+    });
+
+    datafileBucket.grantReadWrite(ghaPublishRole);
+    webBucket.grantReadWrite(ghaPublishRole);
+    ghaPublishRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["cloudfront:CreateInvalidation"],
+        resources: [
+          `arn:aws:cloudfront::${this.account}:distribution/${datafileDist.distributionId}`,
+          `arn:aws:cloudfront::${this.account}:distribution/${webDist.distributionId}`,
+        ],
+      }),
+    );
 
     // --- Outputs ---
     new cdk.CfnOutput(this, "WebUrl", {
       value: `https://${webDist.distributionDomainName}`,
     });
     new cdk.CfnOutput(this, "WebBucketName", { value: webBucket.bucketName });
+    new cdk.CfnOutput(this, "WebDistributionId", {
+      value: webDist.distributionId,
+    });
     new cdk.CfnOutput(this, "DatafileUrl", {
       value: `https://${datafileDist.distributionDomainName}/featurevisor`,
     });
@@ -239,11 +325,17 @@ export class StaleFlagsStack extends cdk.Stack {
     new cdk.CfnOutput(this, "DatafileCloudFrontDomain", {
       value: datafileDist.distributionDomainName,
     });
+    new cdk.CfnOutput(this, "DatafileDistributionId", {
+      value: datafileDist.distributionId,
+    });
     new cdk.CfnOutput(this, "AgentSecretArn", {
       value: agentSecrets.secretArn,
     });
     new cdk.CfnOutput(this, "AgentProjectName", {
       value: agentProject.projectName,
+    });
+    new cdk.CfnOutput(this, "GitHubPublishRoleArn", {
+      value: ghaPublishRole.roleArn,
     });
     new cdk.CfnOutput(this, "Region", { value: this.region });
   }

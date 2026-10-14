@@ -1,7 +1,9 @@
 import {
   clearLocalData,
+  DEMO_TINYBIRD_TABLES,
   ingestToTinybird,
   saveSeed,
+  truncateTinybirdDatasources,
 } from "@stale-flags/local-store";
 import {
   cleanupReport,
@@ -286,10 +288,13 @@ async function main(): Promise<void> {
   await clearLocalData();
   await saveSeed({ definitions, activity, adoption });
 
-  // Optional Tinybird mirror
+  // Wipe Tinybird Cloud tables so re-seed never stacks history or leftover PRs
+  await truncateTinybirdDatasources([...DEMO_TINYBIRD_TABLES]);
+
+  // Mirror into Tinybird (daily activity only; do not also ingest flag_evaluations
+  // or the MV would double-count into flag_daily_activity).
   await ingestToTinybird("flag_definitions", definitions);
   await ingestToTinybird("build_adoption", adoption);
-  // Expand activity into synthetic raw-ish daily only (MV equivalent)
   await ingestToTinybird("flag_daily_activity", activity);
 
   const store = { definitions, activity, adoption };

@@ -1,20 +1,205 @@
 TOKEN endpoint_read READ
-DESCRIPTION Human-facing report of candidates with verdicts
+DESCRIPTION Full safety verdicts for every non-archived flag (TS-parity with packages/verdicts)
+
+NODE latest_defs
+SQL >
+    %
+    SELECT
+        flag_key,
+        argMax(parent_key, captured_at) AS parent_key,
+        argMax(rollout_percentage, captured_at) AS rollout_percentage,
+        argMax(target_value, captured_at) AS target_value,
+        argMax(variation_count, captured_at) AS variation_count,
+        argMax(deprecated, captured_at) AS deprecated,
+        argMax(archived, captured_at) AS archived,
+        argMax(datafile_revision, captured_at) AS datafile_revision,
+        max(captured_at) AS last_captured_at,
+        min(captured_at) AS first_captured_at
+    FROM flag_definitions
+    WHERE environment = {{ String(environment, 'production') }}
+    GROUP BY flag_key
+
+NODE activity
+SQL >
+    %
+    SELECT
+        flag_key,
+        sumIf(event_count, outcome = 'evaluated') AS evaluated_events,
+        sumIf(event_count, outcome = 'blocked_by_parent') AS blocked_events,
+        uniqExactIf(variation, outcome = 'evaluated' AND variation != '') AS distinct_variations,
+        max(day) AS last_day
+    FROM flag_daily_activity
+    WHERE day >= toDate(now() - toIntervalDay({{ Int32(window_days, 90) }}))
+      AND app = 'web'
+    GROUP BY flag_key
+
+NODE first_seen_all
+SQL >
+    SELECT
+        flag_key,
+        min(day) AS first_seen
+    FROM flag_daily_activity
+    WHERE app = 'web'
+    GROUP BY flag_key
+
+NODE level1_descendants
+SQL >
+    SELECT
+        d.parent_key AS ancestor_key,
+        d.flag_key AS descendant
+    FROM latest_defs AS d
+    WHERE d.parent_key != '' AND d.archived = 0
+
+NODE level2_descendants
+SQL >
+    SELECT
+        l1.ancestor_key AS ancestor_key,
+        child.flag_key AS descendant
+    FROM level1_descendants l1
+    INNER JOIN latest_defs AS child
+        ON child.parent_key = l1.descendant AND child.archived = 0
+
+NODE descendants
+SQL >
+    SELECT
+        ancestor_key AS flag_key,
+        groupUniqArray(descendant) AS descendant_keys,
+        length(groupUniqArray(descendant)) AS descendant_count
+    FROM (
+        SELECT ancestor_key, descendant FROM level1_descendants
+        UNION ALL
+        SELECT ancestor_key, descendant FROM level2_descendants
+    )
+    GROUP BY ancestor_key
+
+NODE eval_by_build
+SQL >
+    %
+    SELECT
+        flag_key,
+        build_id,
+        sum(event_count) AS evaluated_events
+    FROM flag_daily_activity
+    WHERE app = 'web'
+      AND day >= toDate(now() - toIntervalDay({{ Int32(window_days, 90) }}))
+      AND outcome = 'evaluated'
+    GROUP BY flag_key, build_id
+    HAVING evaluated_events > 0
+
+NODE live_hits
+SQL >
+    %
+    SELECT
+        e.flag_key,
+        e.build_id,
+        e.evaluated_events,
+        max(toFloat64(b.session_share)) AS session_share,
+        min(b.released_at) AS released_at
+    FROM eval_by_build AS e
+    INNER JOIN build_adoption AS b
+        ON b.build_id = e.build_id AND b.app = 'web'
+       AND b.snapshot_date >= toDate(now() - toIntervalDay({{ Int32(window_days, 90) }}))
+    GROUP BY e.flag_key, e.build_id, e.evaluated_events
+    HAVING session_share >= {{ Float32(min_session_share, 0.005) }}
+
+NODE live_summary
+SQL >
+    SELECT
+        flag_key,
+        count() AS live_hit_count,
+        coalesce(sum(session_share), toFloat64(0)) AS evaluating_share
+    FROM live_hits
+    GROUP BY flag_key
 
 NODE endpoint
 SQL >
     %
     SELECT
-        flag_key,
-        environment,
-        argMax(deprecated, captured_at) AS deprecated,
-        argMax(archived, captured_at) AS archived,
-        argMax(rollout_percentage, captured_at) AS rollout_percentage,
-        argMax(target_value, captured_at) AS target_value,
-        argMax(parent_key, captured_at) AS parent_key
-    FROM flag_definitions
-    WHERE environment = {{ String(environment, 'production') }}
-    GROUP BY flag_key, environment
-    ORDER BY flag_key
+        d.flag_key AS flag_key,
+        multiIf(
+            d.parent_key != '' AND coalesce(a.blocked_events, 0) > 0 AND coalesce(a.evaluated_events, 0) = 0, 'inconclusive',
+            coalesce(de.descendant_count, 0) > 0, 'blocked',
+            d.target_value = '' AND (d.variation_count > 1 OR coalesce(a.evaluated_events, 0) >= {{ Int32(min_events_floor, 20) }}), 'blocked',
+            (d.deprecated = 1 OR d.archived = 1) AND d.target_value = '', 'blocked',
+            d.deprecated = 1 OR d.archived = 1, 'safe_to_remove',
+            coalesce(a.evaluated_events, 0) > 0 AND coalesce(ls.live_hit_count, 0) > 0 AND coalesce(ls.evaluating_share, 0) < 0.5, 'blocked',
+            (coalesce(a.evaluated_events, 0) + coalesce(a.blocked_events, 0)) > 0
+              AND (coalesce(a.evaluated_events, 0) + coalesce(a.blocked_events, 0)) < {{ Int32(min_events_floor, 20) }}, 'inconclusive',
+            fs.first_seen IS NOT NULL AND fs.first_seen >= toDate(now() - toIntervalDay({{ Int32(window_days, 90) }})), 'inconclusive',
+            coalesce(a.evaluated_events, 0) > 0 AND coalesce(a.evaluated_events, 0) < {{ Int32(min_events_floor, 20) }}, 'inconclusive',
+            coalesce(a.evaluated_events, 0) = 0, 'safe_to_remove',
+            coalesce(a.evaluated_events, 0) >= {{ Int32(min_events_for_settled, 1000) }}
+              AND coalesce(a.distinct_variations, 0) = 1
+              AND d.rollout_percentage IN (0, 100)
+              AND coalesce(ls.evaluating_share, 0) >= 0.5, 'safe_to_remove',
+            'inconclusive'
+        ) AS verdict,
+        multiIf(
+            d.parent_key != '' AND coalesce(a.blocked_events, 0) > 0 AND coalesce(a.evaluated_events, 0) = 0, 'abandoned',
+            coalesce(de.descendant_count, 0) > 0, if(d.deprecated = 1 OR d.archived = 1, 'lifecycle', 'abandoned'),
+            d.target_value = '' AND (d.variation_count > 1 OR coalesce(a.evaluated_events, 0) >= {{ Int32(min_events_floor, 20) }}), if(d.deprecated = 1 OR d.archived = 1, 'lifecycle', 'settled'),
+            (d.deprecated = 1 OR d.archived = 1) AND d.target_value = '', 'lifecycle',
+            d.deprecated = 1 OR d.archived = 1, 'lifecycle',
+            coalesce(a.evaluated_events, 0) > 0 AND coalesce(ls.live_hit_count, 0) > 0 AND coalesce(ls.evaluating_share, 0) < 0.5, 'abandoned',
+            (coalesce(a.evaluated_events, 0) + coalesce(a.blocked_events, 0)) > 0
+              AND (coalesce(a.evaluated_events, 0) + coalesce(a.blocked_events, 0)) < {{ Int32(min_events_floor, 20) }}, 'abandoned',
+            fs.first_seen IS NOT NULL AND fs.first_seen >= toDate(now() - toIntervalDay({{ Int32(window_days, 90) }})), 'abandoned',
+            coalesce(a.evaluated_events, 0) > 0 AND coalesce(a.evaluated_events, 0) < {{ Int32(min_events_floor, 20) }}, 'abandoned',
+            coalesce(a.evaluated_events, 0) = 0, 'abandoned',
+            coalesce(a.evaluated_events, 0) >= {{ Int32(min_events_for_settled, 1000) }}
+              AND coalesce(a.distinct_variations, 0) = 1
+              AND d.rollout_percentage IN (0, 100)
+              AND coalesce(ls.evaluating_share, 0) >= 0.5, 'settled',
+            'none'
+        ) AS route,
+        multiIf(
+            d.parent_key != '' AND coalesce(a.blocked_events, 0) > 0 AND coalesce(a.evaluated_events, 0) = 0,
+                concat('Flag ', d.flag_key, ' was never evaluated in the window because parent ', d.parent_key, ' gated every lookup (', toString(coalesce(a.blocked_events, 0)), ' blocked_by_parent events). Absence of evaluations is not evidence of disuse.'),
+            coalesce(de.descendant_count, 0) > 0,
+                concat('Flag ', d.flag_key, ' still has living descendants (', arrayStringConcat(de.descendant_keys, ', '), '). Removal must proceed bottom up.'),
+            d.target_value = '' AND (d.variation_count > 1 OR coalesce(a.evaluated_events, 0) >= {{ Int32(min_events_floor, 20) }}),
+                concat('Flag ', d.flag_key, ' is mid-ramp at ', toString(d.rollout_percentage), '% (or multi-variation) with no single target_value, so the code cannot be collapsed safely.'),
+            (d.deprecated = 1 OR d.archived = 1) AND d.target_value = '',
+                concat('Flag ', d.flag_key, ' is marked for removal but has no single target_value to collapse to.'),
+            d.deprecated = 1 OR d.archived = 1,
+                concat('Featurevisor marked ', d.flag_key, ' as ', if(d.deprecated = 1, 'deprecated', 'archived'), ', structural checks passed, and target_value=', d.target_value, ' supports collapse.'),
+            coalesce(a.evaluated_events, 0) > 0 AND coalesce(ls.live_hit_count, 0) > 0 AND coalesce(ls.evaluating_share, 0) < 0.5,
+                concat('Flag ', d.flag_key, ' is still evaluated by a live minority build cohort (evaluating_share=', toString(round(coalesce(ls.evaluating_share, 0), 3)), ').'),
+            (coalesce(a.evaluated_events, 0) + coalesce(a.blocked_events, 0)) > 0
+              AND (coalesce(a.evaluated_events, 0) + coalesce(a.blocked_events, 0)) < {{ Int32(min_events_floor, 20) }},
+                concat('Flag ', d.flag_key, ' has only ', toString(coalesce(a.evaluated_events, 0) + coalesce(a.blocked_events, 0)), ' events in the window, which is too thin to support a removal decision.'),
+            fs.first_seen IS NOT NULL AND fs.first_seen >= toDate(now() - toIntervalDay({{ Int32(window_days, 90) }})),
+                concat('Flag ', d.flag_key, ' first appeared on ', toString(fs.first_seen), ', inside the window, so the quiet period is incomplete.'),
+            coalesce(a.evaluated_events, 0) > 0 AND coalesce(a.evaluated_events, 0) < {{ Int32(min_events_floor, 20) }},
+                concat('Flag ', d.flag_key, ' has only ', toString(coalesce(a.evaluated_events, 0)), ' evaluated events in the window, which is too thin to support a removal decision.'),
+            coalesce(a.evaluated_events, 0) = 0,
+                concat('Flag ', d.flag_key, ' had zero evaluated events in the window, no live-build hits, and target_value=', d.target_value, ' supports collapse.'),
+            coalesce(a.evaluated_events, 0) >= {{ Int32(min_events_for_settled, 1000) }}
+              AND coalesce(a.distinct_variations, 0) = 1
+              AND d.rollout_percentage IN (0, 100)
+              AND coalesce(ls.evaluating_share, 0) >= 0.5,
+                concat('Flag ', d.flag_key, ' is settled: ', toString(coalesce(a.evaluated_events, 0)), ' evaluations, rollout=', toString(d.rollout_percentage), '%.'),
+            concat('Flag ', d.flag_key, ' did not qualify as abandoned or settled under current thresholds.')
+        ) AS reason,
+        d.target_value,
+        multiIf(
+            d.target_value = '', 'none',
+            d.target_value = 'false', 'delete_gated_branch',
+            'keep_gated_branch'
+        ) AS collapse_direction,
+        d.datafile_revision,
+        coalesce(a.evaluated_events, 0) AS evaluated_events,
+        coalesce(a.blocked_events, 0) AS blocked_events,
+        coalesce(de.descendant_count, 0) AS descendant_count,
+        coalesce(ls.evaluating_share, 0) AS evaluating_share,
+        d.rollout_percentage,
+        d.parent_key
+    FROM latest_defs d
+    LEFT JOIN activity a ON d.flag_key = a.flag_key
+    LEFT JOIN first_seen_all fs ON d.flag_key = fs.flag_key
+    LEFT JOIN descendants de ON d.flag_key = de.flag_key
+    LEFT JOIN live_summary ls ON d.flag_key = ls.flag_key
+    WHERE d.archived = 0
+    ORDER BY d.flag_key
 
 TYPE ENDPOINT

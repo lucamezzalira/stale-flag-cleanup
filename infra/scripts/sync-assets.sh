@@ -15,6 +15,8 @@ web_bucket=$(node -e "const o=JSON.parse(process.argv[1]); console.log(o.find(x=
 data_bucket=$(node -e "const o=JSON.parse(process.argv[1]); console.log(o.find(x=>x.OutputKey==='DatafileBucketName').OutputValue)" "$OUT")
 data_cf=$(node -e "const o=JSON.parse(process.argv[1]); console.log(o.find(x=>x.OutputKey==='DatafileCloudFrontDomain').OutputValue)" "$OUT")
 web_url=$(node -e "const o=JSON.parse(process.argv[1]); console.log(o.find(x=>x.OutputKey==='WebUrl').OutputValue)" "$OUT")
+data_dist=$(node -e "const o=JSON.parse(process.argv[1]); console.log((o.find(x=>x.OutputKey==='DatafileDistributionId')||{}).OutputValue||'')" "$OUT")
+web_dist=$(node -e "const o=JSON.parse(process.argv[1]); console.log((o.find(x=>x.OutputKey==='WebDistributionId')||{}).OutputValue||'')" "$OUT")
 
 DATAFILE_URL="https://${data_cf}/featurevisor/production/featurevisor-all.json"
 
@@ -26,6 +28,11 @@ aws s3 sync featurevisor/datafiles/ "s3://${data_bucket}/featurevisor/" \
   --region "$REGION" \
   --cache-control "max-age=60" \
   --exclude "*" --include "*.json"
+
+if [[ -n "$data_dist" ]]; then
+  aws cloudfront create-invalidation --distribution-id "$data_dist" --paths "/featurevisor/*" \
+    --region "$REGION" --query 'Invalidation.Id' --output text
+fi
 
 # Load Tinybird browser ingest from .env first, then force CloudFront datafile URL
 # (sourcing .env must not overwrite VITE_DATAFILE_URL with a local stand-in)
@@ -46,6 +53,11 @@ aws s3 sync apps/web/dist/ "s3://${web_bucket}/" \
   --region "$REGION" \
   --delete \
   --cache-control "max-age=60"
+
+if [[ -n "$web_dist" ]]; then
+  aws cloudfront create-invalidation --distribution-id "$web_dist" --paths "/*" \
+    --region "$REGION" --query 'Invalidation.Id' --output text
+fi
 
 echo ""
 echo "Web:      $web_url"

@@ -11,6 +11,18 @@ import type {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const dataDir = path.resolve(__dirname, "../../../.local-data");
 
+export type DecisionRow = {
+  decided_at: string;
+  run_id: string;
+  flag_key: string;
+  verdict: string;
+  route?: string;
+  reason: string;
+  evidence: string;
+  pr_url: string;
+  datafile_revision?: string;
+};
+
 async function readJsonl<T>(file: string): Promise<T[]> {
   try {
     const raw = await readFile(path.join(dataDir, file), "utf8");
@@ -48,44 +60,127 @@ export async function saveSeed(input: {
   await writeJsonl("cleanup_decision_log.ndjson", input.decisions ?? []);
 }
 
-export async function appendDecisions(rows: object[]): Promise<void> {
-  const existing = await readJsonl<object>("cleanup_decision_log.ndjson");
-  await writeJsonl("cleanup_decision_log.ndjson", [...existing, ...rows]);
+export async function appendDecisions(rows: DecisionRow[]): Promise<void> {
+  const normalized = rows.map((r) => ({
+    ...r,
+    route: r.route ?? "",
+    datafile_revision: r.datafile_revision ?? "",
+    decided_at: r.decided_at.includes(".")
+      ? r.decided_at
+      : r.decided_at.replace("Z", ".000Z"),
+  }));
+  const existing = await readJsonl<DecisionRow>("cleanup_decision_log.ndjson");
+  await writeJsonl("cleanup_decision_log.ndjson", [
+    ...existing,
+    ...normalized,
+  ]);
+  await ingestToTinybird("cleanup_decision_log", normalized);
 }
 
 export async function loadStore(): Promise<
-  EvidenceStore & {
-    decisions: Array<{
-      decided_at: string;
-      run_id: string;
-      flag_key: string;
-      verdict: string;
-      reason: string;
-      evidence: string;
-      pr_url: string;
-    }>;
-  }
+  EvidenceStore & { decisions: DecisionRow[] }
 > {
   const definitions = await readJsonl<FlagDefinition>("flag_definitions.ndjson");
   const activity = await readJsonl<DailyActivity>("flag_daily_activity.ndjson");
   const adoption = await readJsonl<BuildAdoption>("build_adoption.ndjson");
-  const decisions = await readJsonl<{
-    decided_at: string;
-    run_id: string;
-    flag_key: string;
-    verdict: string;
-    reason: string;
-    evidence: string;
-    pr_url: string;
-  }>("cleanup_decision_log.ndjson");
-  return { definitions, activity, adoption, decisions };
+  const decisions = await readJsonl<DecisionRow>("cleanup_decision_log.ndjson");
+  const firstSeen: Record<string, string> = {};
+  for (const a of activity) {
+    if (a.app !== "web") continue;
+    const prev = firstSeen[a.flag_key];
+    if (!prev || a.day < prev) firstSeen[a.flag_key] = a.day;
+  }
+  return { definitions, activity, adoption, decisions, firstSeen };
 }
+
+async function resolveAdminToken(host: string): Promise<string> {
+  if (process.env.TINYBIRD_ADMIN_TOKEN) return process.env.TINYBIRD_ADMIN_TOKEN;
+  // Workspace admin token lives in .tinyb after `tb login` (not the scoped endpoint_read token).
+  try {
+    const tinybPaths = [
+      path.resolve(dataDir, "../.tinyb"),
+      path.resolve(dataDir, "../tinybird/.tinyb"),
+    ];
+    for (const p of tinybPaths) {
+      try {
+        const raw = await readFile(p, "utf8");
+        const parsed = JSON.parse(raw) as { token?: string; host?: string };
+        if (parsed.token && (!parsed.host || host.includes(new URL(parsed.host).host) || parsed.host === host)) {
+          return parsed.token;
+        }
+        if (parsed.token) return parsed.token;
+      } catch {
+        /* try next */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return "";
+}
+
+export async function truncateTinybirdDatasources(
+  names: string[],
+): Promise<void> {
+  const host =
+    process.env.TINYBIRD_API_HOST ?? "https://api.us-east.aws.tinybird.co";
+  const token = await resolveAdminToken(host);
+  if (!token) {
+    if (process.env.TINYBIRD_APPEND_TOKEN || process.env.TINYBIRD_TOKEN) {
+      throw new Error(
+        "Tinybird truncate requires TINYBIRD_ADMIN_TOKEN or a .tinyb admin token (scoped endpoint_read/append tokens cannot TRUNCATE)",
+      );
+    }
+    console.warn("No Tinybird credentials; skip Tinybird truncate");
+    return;
+  }
+  for (const name of names) {
+    // Prefer SQL TRUNCATE (admin token). Datasource truncate API needs DATASOURCES:CREATE.
+    const sqlRes = await fetch(`${host.replace(/\/$/, "")}/v0/sql`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: `q=${encodeURIComponent(`TRUNCATE TABLE ${name}`)}`,
+    });
+    if (sqlRes.ok) {
+      console.log(`Truncated Tinybird datasource ${name}`);
+      continue;
+    }
+    const sqlText = await sqlRes.text();
+    const res = await fetch(
+      `${host.replace(/\/$/, "")}/v0/datasources/${encodeURIComponent(name)}/truncate`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+    const text = await res.text();
+    if (!res.ok) {
+      throw new Error(
+        `Tinybird truncate ${name}: sql=${sqlRes.status} ${sqlText}; api=${res.status} ${text}`,
+      );
+    }
+    console.log(`Truncated Tinybird datasource ${name}`);
+  }
+}
+
+export const DEMO_TINYBIRD_TABLES = [
+  "cleanup_decision_log",
+  "flag_definitions",
+  "flag_daily_activity",
+  "flag_evaluations",
+  "build_adoption",
+  "session_beacons",
+] as const;
 
 export async function ingestToTinybird(
   name: string,
   rows: object[],
 ): Promise<void> {
-  const host = process.env.TINYBIRD_API_HOST ?? "https://api.tinybird.co";
+  const host =
+    process.env.TINYBIRD_API_HOST ?? "https://api.us-east.aws.tinybird.co";
   const token =
     process.env.TINYBIRD_APPEND_TOKEN ?? process.env.TINYBIRD_TOKEN ?? "";
   if (!token || rows.length === 0) return;
