@@ -272,11 +272,17 @@ export class StaleFlagsStack extends cdk.Stack {
     const existingOidcArn = this.node.tryGetContext(
       "githubOidcProviderArn",
     ) as string | undefined;
+    // Prefer an existing account OIDC provider. If creating one, use current
+    // GitHub Actions CA thumbprints (old single thumbprints break AssumeRole).
     const githubProviderArn =
       existingOidcArn ??
       new iamOidc.OpenIdConnectProvider(this, "GitHubOidc", {
         url: "https://token.actions.githubusercontent.com",
         clientIds: ["sts.amazonaws.com"],
+        thumbprints: [
+          "6938fd4d98bab03faadb97b34396831e3780aea1",
+          "1c58a3a8518e8759bf075b76b750d4f5df17b295",
+        ],
       }).openIdConnectProviderArn;
 
     const ghaPublishRole = new iam.Role(this, "GitHubPublishRole", {
@@ -287,10 +293,12 @@ export class StaleFlagsStack extends cdk.Stack {
           StringEquals: {
             "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
           },
+          // GitHub may emit classic sub (owner/repo) or ID-qualified
+          // sub (owner@id/repo@id). Allow both for this repo.
           StringLike: {
             "token.actions.githubusercontent.com:sub": [
-              `repo:${githubRepo}:ref:refs/heads/main`,
-              `repo:${githubRepo}:ref:refs/heads/demo`,
+              `repo:${githubRepo}:*`,
+              `repo:${String(githubRepo).replace("/", "@*/")}@*:*`,
             ],
           },
         },
@@ -307,6 +315,17 @@ export class StaleFlagsStack extends cdk.Stack {
         resources: [
           `arn:aws:cloudfront::${this.account}:distribution/${datafileDist.distributionId}`,
           `arn:aws:cloudfront::${this.account}:distribution/${webDist.distributionId}`,
+        ],
+      }),
+    );
+    ghaPublishRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "cloudformation:DescribeStacks",
+          "cloudformation:ListStackResources",
+        ],
+        resources: [
+          `arn:aws:cloudformation:${this.region}:${this.account}:stack/${cdk.Stack.of(this).stackName}/*`,
         ],
       }),
     );

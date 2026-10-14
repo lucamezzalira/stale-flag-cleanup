@@ -35,6 +35,14 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      - name: Build workspace packages
+        run: >
+          pnpm --filter @stale-flags/defs-utils
+          --filter @stale-flags/flag-client
+          --filter @stale-flags/verdicts
+          --filter @stale-flags/local-store
+          run build
+
       - name: Configure AWS (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
