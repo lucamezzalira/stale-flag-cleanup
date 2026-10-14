@@ -213,6 +213,8 @@ export class StaleFlagsStack extends cdk.Stack {
                 'echo "branch=$(git rev-parse --abbrev-ref HEAD)"',
                 "git log -1 --oneline",
                 "pnpm install --frozen-lockfile",
+                // Workspace packages export dist/; CI has no local build cache.
+                "pnpm --filter @stale-flags/defs-utils --filter @stale-flags/verdicts --filter @stale-flags/local-store run build",
                 "SCOUT_SOURCE=tinybird BEDROCK_DISABLED=0 pnpm agent:run",
               ].join("\n"),
             ],
