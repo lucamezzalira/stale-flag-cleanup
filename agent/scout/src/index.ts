@@ -249,10 +249,15 @@ async function main(): Promise<void> {
   const argv = process.argv.filter((a) => a !== "--");
   const dryRun = argv.includes("--dry-run") || !argv.includes("--full");
   const full = argv.includes("--full");
+  const emitJson = argv.includes("--emit-json");
+  const noDispatch =
+    argv.includes("--no-dispatch") ||
+    emitJson ||
+    process.env.AGENT_ORCHESTRATOR === "stepfunctions";
   const tinybird = useTinybird() || argv.includes("--tinybird");
   const id = runId();
   console.log(
-    `Scout run_id=${id} dryRun=${dryRun || !full} source=${tinybird ? "tinybird-mcp" : "local"}\n`,
+    `Scout run_id=${id} dryRun=${dryRun || !full} source=${tinybird ? "tinybird-mcp" : "local"} dispatch=${!noDispatch}\n`,
   );
 
   const localMeta = tinybird ? null : await loadFromLocal();
@@ -303,31 +308,35 @@ async function main(): Promise<void> {
     datafile_revision: r.datafile_revision ?? "",
   }));
 
+  const safe = results.filter(
+    (r) =>
+      r.verdict === "safe_to_remove" && r.collapse_direction !== "none",
+  );
+
   if (dryRun || !full) {
     console.log(
       `\nProposed surgeon actions: ${
-        results
-          .filter(
-            (r) =>
-              r.verdict === "safe_to_remove" &&
-              r.collapse_direction !== "none",
-          )
-          .map((r) => r.flag_key)
-          .join(", ") || "(none)"
+        safe.map((r) => r.flag_key).join(", ") || "(none)"
       }`,
     );
     console.log(
       "Re-run with --full to write cleanup_decision_log and dispatch surgeons.",
     );
+    if (emitJson) writeOrchestratorOutput(id, results, safe);
     return;
   }
 
   await appendDecisions(decisions);
 
-  for (const r of results) {
-    if (r.verdict !== "safe_to_remove" || r.collapse_direction === "none") {
-      continue;
-    }
+  if (emitJson || noDispatch) {
+    writeOrchestratorOutput(id, results, safe);
+    console.log(
+      `\nOrchestrator mode: wrote ${safe.length} candidate(s); skipping in-process surgeon dispatch.`,
+    );
+    return;
+  }
+
+  for (const r of safe) {
     const payload = Buffer.from(JSON.stringify({ ...r, run_id: id })).toString(
       "base64url",
     );
@@ -347,6 +356,51 @@ async function main(): Promise<void> {
       console.error(`Surgeon failed for ${r.flag_key}`);
     }
   }
+}
+
+function writeOrchestratorOutput(
+  runIdValue: string,
+  results: SafetyCheckResult[],
+  safe: SafetyCheckResult[],
+): void {
+  const out = {
+    run_id: runIdValue,
+    candidates: safe.map((r) => ({
+      flag_key: r.flag_key,
+      verdict: r.verdict,
+      route: r.route,
+      collapse_direction: r.collapse_direction,
+      target_value: r.target_value,
+      reason: r.reason,
+      datafile_revision: r.datafile_revision ?? "",
+      payload_b64: Buffer.from(
+        JSON.stringify({ ...r, run_id: runIdValue }),
+      ).toString("base64url"),
+    })),
+    skipped: results
+      .filter((r) => !safe.some((s) => s.flag_key === r.flag_key))
+      .map((r) => ({
+        flag_key: r.flag_key,
+        verdict: r.verdict,
+        route: r.route,
+      })),
+  };
+  const json = `${JSON.stringify(out)}\n`;
+  const dest = process.env.RESULT_S3_URI;
+  if (dest?.startsWith("s3://")) {
+    const put = spawnSync("aws", ["s3", "cp", "-", dest], {
+      input: json,
+      encoding: "utf8",
+      cwd: root,
+    });
+    if (put.status !== 0) {
+      throw new Error(
+        `Failed to write scout result to ${dest}: ${put.stderr || put.stdout}`,
+      );
+    }
+    console.log(`Wrote scout result to ${dest}`);
+  }
+  console.log(`ORCHESTRATOR_JSON:${JSON.stringify(out)}`);
 }
 
 main().catch((err) => {

@@ -1,6 +1,6 @@
 # Manual QA Agent (stale-flag cleanup)
 
-Cursor agent playbook. Run this after every `pnpm infra:agent-run` (or scheduled CodeBuild). Produce a durable report canvas for the run at:
+Cursor agent playbook. Run this after every `pnpm infra:agent-run` (or the midnight UTC Step Functions schedule). Produce a durable report canvas for the run at:
 
 `/Users/lucamezzalira/.cursor/projects/Users-lucamezzalira-Documents-tinybird/canvases/qa-run-<YYYYMMDD-HHMM>.canvas.tsx`
 
@@ -21,44 +21,58 @@ Datafile URL: `https://d1jcup3snfgsrs.cloudfront.net/featurevisor/production/fea
 
 ```bash
 pnpm infra:agent-run
-# capture build id, e.g. stale-flags-agent:<uuid>
+# capture executionArn, e.g. arn:aws:states:us-east-1:…:execution:stale-flags-cleanup:<uuid>
 ```
 
 Record:
 
-- `build_id`
+- `execution_arn` (and short execution name = last path segment)
 - `started_at` (UTC)
 - `BEDROCK_MODEL_ID` expected: `us.anthropic.claude-sonnet-4-5-20250929-v1:0`
+- Results bucket: stack output `AgentResultsBucketName`
 
-## Phase 1. CodeBuild / CloudWatch
+## Phase 1. Step Functions / ECS / S3
 
 ```bash
-aws codebuild batch-get-builds --region us-east-1 \
-  --ids "$BUILD_ID" \
-  --query 'builds[0].{status:buildStatus,phase:currentPhase,start:startTime,end:endTime}'
+aws stepfunctions describe-execution --region us-east-1 \
+  --execution-arn "$EXECUTION_ARN" \
+  --query '{status:status,start:startDate,stop:stopDate,error:error}'
+
+# History (state names: Scout, LoadScoutResult, HasCandidates, RemoveFlags, NotifyMergeGate, …)
+aws stepfunctions get-execution-history --region us-east-1 \
+  --execution-arn "$EXECUTION_ARN" --max-items 50 \
+  --query 'events[?type==`TaskStateEntered` || type==`TaskFailed` || type==`ExecutionSucceeded` || type==`ExecutionFailed`].[id,type,timestamp]' \
+  --output table
 ```
 
-When `SUCCEEDED` or `FAILED`, pull logs:
+ECS logs (log group created by CDK under the Agent construct; stream prefix `agent`):
 
 ```bash
-# Log group from stack: typically /aws/codebuild/stale-flags-agent
-aws logs describe-log-streams --region us-east-1 \
-  --log-group-name /aws/codebuild/stale-flags-agent \
-  --order-by LastEventTime --descending --max-items 1
+aws logs describe-log-groups --region us-east-1 \
+  --log-group-name-prefix /aws/ecs --query 'logGroups[*].logGroupName'
 
-aws logs get-log-events --region us-east-1 \
-  --log-group-name /aws/codebuild/stale-flags-agent \
-  --log-stream-name "$STREAM" --limit 200
+# Or find the task:
+aws ecs list-tasks --cluster stale-flags-agent --region us-east-1
+```
+
+S3 handoff (execution name = `basename` of execution ARN):
+
+```bash
+BUCKET=$(aws cloudformation describe-stacks --stack-name StaleFlagsStack --region us-east-1 \
+  --query "Stacks[0].Outputs[?OutputKey=='AgentResultsBucketName'].OutputValue" --output text)
+EXEC_NAME="${EXECUTION_ARN##*:}"
+aws s3 cp "s3://$BUCKET/$EXEC_NAME/scout.json" - | jq '{run_id, candidates: [.candidates[].flag_key], skipped: [.skipped[].flag_key]}'
 ```
 
 Pass criteria:
 
-- Install has `ripgrep` + `gh`
-- Scout source is Tinybird (`source=tinybird-mcp` or REST fallback)
+- Execution reaches `Succeeded` or `NothingToDo` (not `ScoutFailed`)
+- Scout source is Tinybird (`source=tinybird-mcp` or REST fallback in ECS logs)
+- `scout.json` has `candidates` for the two safe flags when evidence is seeded
 - Surgeon uses Bedrock Sonnet 4.5 (or logs heuristic fallback only if Bedrock fails)
-- No `pnpm seed` in the build
+- No `pnpm seed` in the task
 
-Fail criteria: build `FAILED`, missing `rg`, git auth failure, Bedrock `AccessDenied` without successful heuristic fallback + PR.
+Fail criteria: execution `FAILED`, missing `rg`, git auth failure, Bedrock `AccessDenied` without successful heuristic fallback + PR, S3 object missing after Scout task exit 0.
 
 ## Phase 2. Tinybird evidence (pre-merge)
 
@@ -79,154 +93,51 @@ curl -sS -H "Authorization: Bearer $TINYBIRD_TOKEN" \
 
 Pass criteria:
 
-- `promo_banner_2025` + `one_click_buy` → `safe_to_remove`
-- `wishlist` blocked with descendants including `wishlist_sharing` and `wishlist_sharing_qr`
-- `wishlist_sharing` / `wishlist_sharing_qr` → `inconclusive` (parent-gated)
-- `checkout_redesign` → `blocked` (sticky live build)
-- `shipping_estimator` → `blocked` (mid-ramp)
-- `search_ranking_v2` → `inconclusive` (thin evidence)
-- After surgeon success, `cleanup_decision_log` / `flag_candidates.last_pr_url` populated for the two safe flags
+- Two safe flags with non-`none` collapse directions
+- Six refusals still refuse
+- If `last_pr_url` is set from a prior run and scout skips, truncate `cleanup_decision_log` / run `pnpm demo:reset` before re-demoing
 
-Also confirm MCP path if used:
+## Phase 3. GitHub PRs (merge gate)
+
+Expect up to two open PRs into `demo` (`agent/remove-promo_banner_2025`, `agent/remove-one_click_buy` or similar).
 
 ```bash
-SCOUT_SOURCE=tinybird pnpm agent:scout -- --dry-run --tinybird
+gh pr list --base demo --state open
 ```
 
-## Phase 3. GitHub PRs (code review)
+SNS topic `stale-flags-merge-gate` should have received a notify message when candidates were processed (subscribe if you want email/SMS).
 
-```bash
-gh pr list --repo lucamezzalira/stale-flag-cleanup --base demo \
-  --json number,title,url,headRefName,state,files
-```
+**Stop here.** Tell the human which PRs to merge. Do not merge.
 
-For each agent PR (`agent/remove-<flag_key>`):
+## Phase 4. Post-merge (after human confirms)
 
-```bash
-gh pr view <N> --repo lucamezzalira/stale-flag-cleanup --json title,body,files,commits,url
-gh pr diff <N> --repo lucamezzalira/stale-flag-cleanup
-```
+1. Wait for `publish-flags.yml` on `demo` (or run `pnpm infra:sync`).
+2. Hard-refresh the shop. Confirm Listing / Checkout UI expectations in the table above.
+3. Confirm datafile no longer lists removed feature keys (or marks them absent).
+4. Update the canvas with merge SHAs, GHA run URL, and browser results.
 
-Pass criteria per flag:
+## Canvas report template
 
-### `promo_banner_2025` (`delete_gated_branch`)
+Title: `QA run <stamp>`
 
-- Deletes `featurevisor/features/promo_banner_2025.yml` and its spec
-- `Listing.tsx`: no `useFlag("promo_banner_2025")`, no `<FlagCallout flagKey="promo_banner_2025" />`, no promo banner UI
-- Unused imports removed (`FlagCallout` / `useFlag` if no longer needed)
-- Diff does **not** touch unrelated flags or `infra/` / `tinybird/` / `agent/`
+Sections:
 
-### `one_click_buy` (`keep_gated_branch`)
+1. Run identity (execution ARN, status, model)
+2. Scout candidates vs Tinybird pipes
+3. Surgeon outcomes (PR URLs, Bedrock vs heuristic)
+4. Merge gate (waiting / merged)
+5. Post-merge browser + CDN
+6. Failures / follow-ups
 
-- Deletes `featurevisor/features/one_click_buy.yml` and its spec
-- `Checkout.tsx`: keeps One-click buy button; removes `useFlag("one_click_buy")` and its `FlagCallout`
-- Leaves `checkout_redesign` and `shipping_estimator` intact
+## Common failure modes (SFN / ECS)
 
-Fail criteria: leftover `rg` matches for the flag key in `apps` / `featurevisor` (except ignored datafiles), whole-file rewrites that delete sibling flags, PR open against `main`.
-
-## Phase 4. Human merge gate (STOP)
-
-Notify the human in chat + canvas with:
-
-- PR URLs
-- One-line summary of what each PR removes/keeps
-- Explicit ask: **Please merge PR #N and PR #M into `demo`, then tell me when done.**
-
-Do not merge, force-push, or close PRs unless the human asks.
-
-## Phase 5. Post-merge automation
-
-After the human confirms merges:
-
-1. Wait for GitHub Actions `publish-flags` on `demo` (datafile S3 sync + CloudFront invalidation + optional `publish-defs`):
-
-```bash
-gh run list --repo lucamezzalira/stale-flag-cleanup --branch demo --workflow publish-flags.yml --limit 5
-gh run watch <RUN_ID> --repo lucamezzalira/stale-flag-cleanup
-```
-
-If the workflow is not configured/secrets missing, fall back to local:
-
-```bash
-pnpm infra:sync
-```
-
-2. Wait ~60–90s for CloudFront datafile TTL / invalidation.
-
-3. Re-check Tinybird:
-
-```bash
-# last_pr_url should still point at merged PRs; verdicts may stay safe_to_remove
-# until the next scout run. Flag definitions should eventually reflect removal
-# after publish-defs / seed policy for the demo.
-curl -sS -H "Authorization: Bearer $TINYBIRD_TOKEN" \
-  "$TINYBIRD_API_HOST/v0/pipes/flag_candidates.json" | jq .
-```
-
-## Phase 6. Browser verification
-
-Use the Cursor browser tools against `WebUrl`:
-
-1. Hard refresh Listing (`/`) and Checkout (`/checkout` or the app’s checkout route).
-2. Confirm datafile no longer lists removed flags:
-
-```bash
-curl -sS "https://d1jcup3snfgsrs.cloudfront.net/featurevisor/production/featurevisor-all.json" \
-  | jq '.features | keys'
-```
-
-Expected after successful publish of both removals:
-
-- `promo_banner_2025` **absent** from datafile + Listing UI
-- `one_click_buy` **absent** from datafile; Checkout still shows One-click buy CTA
-- `checkout_redesign`, `shipping_estimator`, wishlist family **still present**
-
-Screenshot Listing + Checkout and attach findings into the canvas (describe results; do not invent UI state).
-
-## Phase 7. Write / update the run canvas
-
-Create or update a canvas with embedded (no `fetch`) data:
-
-- Run metadata (build id, status, model, timestamps)
-- Tinybird verdict table (all 8 flags)
-- Decision log / `last_pr_url` rows
-- PR table (number, flag, collapse, review pass/fail, merge status)
-- Post-merge automation status
-- Browser / datafile checks
-- Open human actions (merge needed / done)
-
-Canvas path pattern:
-
-`/Users/lucamezzalira/.cursor/projects/Users-lucamezzalira-Documents-tinybird/canvases/qa-run-<stamp>.canvas.tsx`
-
-Link the canvas in the chat reply every time.
-
-## Quick commands cheat sheet
-
-```bash
-# Start agent
-pnpm infra:agent-run
-
-# Local Tinybird scout dry-run
-SCOUT_SOURCE=tinybird pnpm agent:scout -- --dry-run --tinybird
-
-# Reset demo (closes agent PRs, truncates Tinybird, reseeds)
-pnpm demo:reset
-
-# Secrets / sync
-pnpm infra:secrets
-pnpm infra:sync
-```
-
-## Failure triage
-
-| Symptom | Likely cause | Action |
+| Symptom | Likely cause | What to check |
 |---|---|---|
-| CodeBuild fails on `gh` / `rg` | install phase | Check buildspec apt/gh install |
-| CodeBuild `Illegal option -o pipefail` | `/bin/sh` buildspec | Use `set -eu` only (no pipefail) |
-| Scout skips both safe flags | stale `last_pr_url` in Tinybird | `pnpm demo:reset` or truncate `cleanup_decision_log` |
-| Surgeon `AccessDenied` Bedrock | model entitlement | Confirm Sonnet 4.5 Converse; check `BEDROCK_MODEL_ID` |
-| PR exists but Tinybird `last_pr_url` empty | append token / Events API | Check `TINYBIRD_APPEND_TOKEN` in Secrets Manager |
-| Browser still shows removed flag | CDN cache / publish-flags not run | Invalidate CloudFront or `pnpm infra:sync` |
-| `publish-flags` fails on pnpm/action-setup dual version | `version:` + `packageManager` both set | Drop `version:` from workflow; use packageManager only |
-| Wishlist marked `safe_to_remove` | descendant SQL regression | Fail run; inspect `cleanup_report` reason |
+| Scout task `CannotPullContainer` / exec format | Image arch ≠ task arch | Task is ARM64; rebuild image on matching arch or set `platform` |
+| ScoutSucceeded but LoadScoutResult fails | Missing `scout.json` | RESULT_S3_URI write in scout; task role S3 put |
+| ParseScoutResult fails | Body encoding | ASL uses `States.Base64Decode` + `StringToJson` on GetObject Body |
+| HasCandidates → NothingToDo | No safe flags / skip due to `last_pr_url` | Tinybird decision log; truncate if re-demo |
+| Surgeon Map item → SurgeonFailed | Gates / Bedrock / git | ECS logs for that FLAG_KEY |
+| Notify never fires | Choice took NothingToDo or Map empty | scout.json candidates |
+| Public IP / timeout on clone | VPC egress | Public subnet + assignPublicIp; security groups |
+| Old schedule still firing | Leftover CodeBuild schedule | Only `stale-flags-sfn-nightly-utc` should exist |

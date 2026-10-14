@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+**/dist
+.local-data
+featurevisor/datafiles
+infra/cdk.out
+.git
+.env
+.tinyb
+*.log
+coverage
+.DS_Store
+docs/article-handoff.local.md
