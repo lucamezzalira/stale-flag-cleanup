@@ -228,4 +228,5 @@ pnpm infra:sync
 | Surgeon `AccessDenied` Bedrock | model entitlement | Confirm Sonnet 4.5 Converse; check `BEDROCK_MODEL_ID` |
 | PR exists but Tinybird `last_pr_url` empty | append token / Events API | Check `TINYBIRD_APPEND_TOKEN` in Secrets Manager |
 | Browser still shows removed flag | CDN cache / publish-flags not run | Invalidate CloudFront or `pnpm infra:sync` |
+| `publish-flags` fails on pnpm/action-setup dual version | `version:` + `packageManager` both set | Drop `version:` from workflow; use packageManager only |
 | Wishlist marked `safe_to_remove` | descendant SQL regression | Fail run; inspect `cleanup_report` reason |
