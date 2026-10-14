@@ -1,8 +1,0 @@
-feature: one_click_buy
-assertions:
-  - at: 50
-    description: "One click buy is on at 100%"
-    environment: production
-    context:
-      userId: user-smoke-1
-    expectedToBeEnabled: true
