@@ -179,9 +179,11 @@ export class AgentOrchestrator extends Construct {
       resultPath: "$.scoutRaw",
     });
 
+    // CallAwsService s3:getObject returns Body as a UTF-8 string in ASL
+    // (not base64). Base64Decode corrupts the JSON.
     const parseScout = new sfn.Pass(this, "ParseScoutResult", {
       parameters: {
-        "scout.$": "States.StringToJson(States.Base64Decode($.scoutRaw.body))",
+        "scout.$": "States.StringToJson($.scoutRaw.body)",
       },
     });
 
@@ -244,8 +246,7 @@ export class AgentOrchestrator extends Construct {
 
     const parseSurgeon = new sfn.Pass(this, "ParseSurgeonResult", {
       parameters: {
-        "result.$":
-          "States.StringToJson(States.Base64Decode($.surgeonRaw.body))",
+        "result.$": "States.StringToJson($.surgeonRaw.body)",
       },
       outputPath: "$.result",
     });
