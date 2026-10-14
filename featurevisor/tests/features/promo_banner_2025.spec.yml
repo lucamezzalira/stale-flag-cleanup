@@ -1,8 +1,0 @@
-feature: promo_banner_2025
-assertions:
-  - at: 50
-    description: "Promo banner is off at 0% rollout"
-    environment: production
-    context:
-      userId: user-smoke-1
-    expectedToBeEnabled: false
