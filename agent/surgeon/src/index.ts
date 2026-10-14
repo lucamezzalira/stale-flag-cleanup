@@ -124,11 +124,12 @@ function assertRgOk(grep: {
 }
 
 function findReferenceFiles(flagKey: string): string[] {
-  const grep = spawnSync(
-    "rg",
-    ["-l", flagKey, "apps", "packages"],
-    { cwd: root, encoding: "utf8" },
-  );
+  // Only app call sites. packages/* may mention flag keys in unit fixtures
+  // (e.g. verdicts tests) and must not be edited by the surgeon.
+  const grep = spawnSync("rg", ["-l", flagKey, "apps"], {
+    cwd: root,
+    encoding: "utf8",
+  });
   assertRgOk(grep);
   if (grep.status === 1) return [];
   return (grep.stdout || "")
@@ -139,14 +140,16 @@ function findReferenceFiles(flagKey: string): string[] {
 }
 
 function flagStillReferenced(flagKey: string): string {
+  // App + Featurevisor definitions only. Skip packages/ (test fixtures) and
+  // built datafiles that still embed the removed key until republish.
   const grep = spawnSync(
     "rg",
     [
       "-n",
       flagKey,
       "apps",
-      "packages",
-      "featurevisor",
+      "featurevisor/features",
+      "featurevisor/tests",
       "-g",
       "!datafiles/**",
     ],
@@ -519,10 +522,13 @@ async function editLoop(payload: Payload, files: string[]): Promise<{
     ]);
 
     if (leftover) {
+      for (const [f, src] of originals) writeFileSync(f, src);
       gateLog = `Flag key still referenced:\n${leftover}`;
+      console.warn(`Attempt ${attempt} gate fail: leftover references`);
       continue;
     }
     if (!fvBuild.ok || !tsc.ok || !vite.ok || !fvLint.ok || !fvTest.ok) {
+      for (const [f, src] of originals) writeFileSync(f, src);
       gateLog = [
         !fvBuild.ok ? `featurevisor build:\n${fvBuild.log}` : "",
         !tsc.ok ? `tsc:\n${tsc.log}` : "",
@@ -532,12 +538,17 @@ async function editLoop(payload: Payload, files: string[]): Promise<{
       ]
         .filter(Boolean)
         .join("\n\n");
+      console.warn(
+        `Attempt ${attempt} gate fail: ${gateLog.slice(0, 500).replace(/\n/g, " | ")}`,
+      );
       continue;
     }
 
+    console.log(`Attempt ${attempt}: gates passed`);
     return { ok: true, gateLog: "gates passed" };
   }
 
+  console.error(`Surgeon exhausted attempts: ${gateLog.slice(0, 2000)}`);
   return { ok: false, gateLog: gateLog || "exhausted attempts" };
 }
 
@@ -672,6 +683,7 @@ async function main(): Promise<void> {
 
   const { ok, gateLog } = await editLoop(payload, files);
   if (!ok) {
+    console.error(`Surgeon failed for ${payload.flag_key}: ${gateLog.slice(0, 2000)}`);
     await appendDecisions([
       {
         decided_at: new Date().toISOString(),
