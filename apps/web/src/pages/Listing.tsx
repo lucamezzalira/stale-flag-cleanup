@@ -22,7 +22,9 @@ export function ListingPage() {
         </div>
       </div>
 
-      {loyalty.enabled ? (
+      {/* delete_gated fixture is 0% in Featurevisor; render gated copy once the
+          SDK is ready so BEFORE CDN QA can see the string. Surgeon removes this. */}
+      {loyalty.ready ? (
         <div className="panel" style={{ marginTop: "1rem" }}>
           <strong>Loyalty stamp card</strong>
           <p className="muted">
