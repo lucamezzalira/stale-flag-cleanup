@@ -17,7 +17,9 @@ Current safe fixtures for a green demo:
 
 Refusals (still present, no PR): `wishlist` (+ children), `checkout_redesign`, `shipping_estimator`, `search_ranking_v2`.
 
-Assert by **key lists from scout `plan.json`**, never `candidates.length === 2` with fixed promo/one_click keys.
+Assert by **key lists from scout `plan.json`**, never `candidates.length === 2` with fixed
+promo/one_click or loyalty/express keys. Latest proven pair: `size_guide_panel` +
+`search_typo_suggest` (PR #11, SFN `4541b483-…`).
 
 Web URL: stack `WebUrl` (`https://dj37uarwx2jpn.cloudfront.net`).
 Datafile: `https://d1jcup3snfgsrs.cloudfront.net/featurevisor/production/featurevisor-all.json`.

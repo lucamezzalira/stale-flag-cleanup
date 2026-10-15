@@ -52,16 +52,16 @@ Seed the random source so runs are reproducible, and expose the seed as a parame
 Build each scenario by shaping the traffic, not by writing the verdict. If the endpoint has
 to be told the answer, the PoC proves nothing.
 
-**`loyalty_stamp_banner`.** Active traffic ending well before the window opens, nothing (or
-near-nothing) inside it. Give it a visible tail in the data before the cut so a chart shows
-a feature that was shipped and then went quiet. Paired with 0% rollout →
-`delete_gated_branch`.
+**`size_guide_panel` (delete_gated fixture).** Active traffic ending well before the window
+opens, nothing (or near-nothing) inside it. Give it a visible tail before the cut so a chart
+shows a feature that shipped and then went quiet. Paired with 0% rollout + deprecated →
+`delete_gated_branch`. (Earlier alias in older seeds: `loyalty_stamp_banner`.)
 
-**`express_pay_hint`.** Heavy, healthy traffic right across the window, on the checkout path
-so the volume is high. Every evaluated event carries the same variation, because the rollout
-has been at 100% for months. This is the settled / keep_gated case and it must look
+**`search_typo_suggest` (keep_gated fixture).** Heavy, healthy traffic right across the
+window on the Search path. Every evaluated event carries the same variation, because the
+rollout has been at 100% for months. This is the settled / keep_gated case and it must look
 completely alive in every chart, which is exactly why a rule based only on absence of
-traffic would never find it.
+traffic would never find it. (Earlier alias: `express_pay_hint`.)
 
 **`checkout_redesign`.** Healthy evaluation traffic from builds older than about three
 months, then nothing from any build released since. One specific older build, released
@@ -128,7 +128,7 @@ path used by the generator is the same one the application uses.
 - Running the PRD-02 acceptance checks immediately after seeding produces every expected
   verdict without any further intervention
 - A chart of daily events per flag looks like real traffic: diurnal, weekly, trending
-- `express_pay_hint` is visibly one of the busiest flags in that chart while still being a
+- `search_typo_suggest` (or the current keep_gated safe) is visibly one of the busiest flags in that chart while still being a
   removal candidate, which is the single most useful image in the article
 - Two runs with the same seed produce identical data
 - `trickle` only adds events for flags still present in `flag_definitions` (skips keys

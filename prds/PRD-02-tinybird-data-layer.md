@@ -186,9 +186,9 @@ It must be readable as a table. Keep the column count low and put the detail in 
 Against the seeded dataset from PRD-03 (with removable fixtures present):
 
 - `flag_candidates` / `cleanup_report` return all eight flags
-- Independently `safe_to_remove` with a real collapse: `loyalty_stamp_banner`
-  (`delete_gated_branch`) and `express_pay_hint` (`keep_gated_branch`). No hardcoded
-  two-key allowlist in scout or pipes
+- Independently `safe_to_remove` with a real collapse (latest E2E): `size_guide_panel`
+  (`delete_gated_branch`) and `search_typo_suggest` (`keep_gated_branch`). No hardcoded
+  two-key allowlist in scout or pipes. Earlier: `loyalty_stamp_banner` / `express_pay_hint`
 - `flag_safety_check?key=…` matches `cleanup_report` for the same key (per-flag event
   counts, not workspace totals)
 - `checkout_redesign` returns `blocked` naming the sticky live-build minority

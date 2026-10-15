@@ -147,8 +147,8 @@ truncate needs an admin / `.tinyb` token.
 - A dry run prints all candidates with pipe verdicts and proposes action only on
   independently `safe_to_remove` flags (`collapse_direction != none`)
 - A full orchestrated run opens **one** pull request covering every planned safe flag
-  (all-or-nothing). E2E fixtures use keys such as `loyalty_stamp_banner` /
-  `express_pay_hint`, not a hardcoded classic-pair allowlist or `candidates.length === 2`
+  (all-or-nothing). E2E fixtures use keys such as `size_guide_panel` /
+  `search_typo_suggest`, not a hardcoded classic-pair allowlist or `candidates.length === 2`
 - Collapse direction comes from Tinybird, never inferred ad hoc in the surgeon
 - Surgeon re-verifies each flag with `flag_safety_check?key=` immediately before edit;
   stale plan payloads abort with no PR

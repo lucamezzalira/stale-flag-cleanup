@@ -32,14 +32,15 @@ Historical first pair (CodeBuild-era, already merged):
 - [x] Permalink to `#5` (`one_click_buy`, keep_gated) and `#6` (`promo_banner_2025`,
       delete_gated)
 
-Production E2E pair (Fargate, one multi-flag PR):
+Production E2E pairs (Fargate, one multi-flag PR):
 
 - [x] Permalink to `#9` covering `express_pay_hint` + `loyalty_stamp_banner`, with YAML +
       app diffs (not REVISION-only). Fail any capture that is REVISION-only (`#7`/`#8` closed
       as false greens)
-- [ ] A side by side of delete_gated vs keep_gated diffs proving the agent read rollout /
-      `target_value` rather than guessing
-- [ ] The pull request body, showing the reason, evidence and run id
+- [x] Permalink to `#11` covering `search_typo_suggest` + `size_guide_panel`, with YAML +
+      app diffs, Decision (REST) + Evidence (MCP) PR body (`4541b483-…`)
+- [x] Side by side UI before/after: captures `16`–`19` under `docs/captures/article-2026-10/`
+- [x] PR body Decision + Evidence: capture `20-pr11-body-decision-evidence.png`
 
 Use permalinks to a specific commit, not branch links, because `demo:reset` will move the
 branch.
@@ -47,7 +48,7 @@ branch.
 ### The data, which proves it is not staged
 
 - [ ] A chart of daily events per flag across the window, showing diurnal and weekly shape
-- [ ] The same chart with `express_pay_hint` (or the current keep_gated safe) visible as one
+- [ ] The same chart with `search_typo_suggest` (or the current keep_gated safe) visible as one
       of the busiest flags while still being a removal candidate
 - [ ] A row count and a screenshot of the Tinybird datasource after seeding
 

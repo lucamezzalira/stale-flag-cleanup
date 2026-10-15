@@ -22,7 +22,7 @@ from PRD-02 and nothing else, and asks in plain language:
 
 - which flags are queued for deletion tonight
 - why `checkout_redesign` keeps getting skipped
-- why `express_pay_hint` is a candidate when it is one of the busiest flags we have
+- why `search_typo_suggest` (or the current keep_gated safe) is a candidate when it is one of the busiest flags we have
 - what happens to the wishlist chain if `wishlist` is turned on
 
 The answers come from `cleanup_report` and `flag_safety_check` (param `key=` for the
@@ -84,7 +84,7 @@ The quickstart has to work on a clean machine. Test it on one before the draft g
 
 - With the Tinybird MCP connected and scoped to the three endpoints, asking which flags are
   queued for deletion returns the correct answer with reasons that read as sentences
-- Asking why `express_pay_hint` is a candidate returns an explanation of the settled /
+- Asking why `search_typo_suggest` is a candidate returns an explanation of the settled /
   keep_gated case that a developer would accept without further questions
 - `pnpm report` prints all live flags with their routes, verdicts and collapse directions
   in a readable table

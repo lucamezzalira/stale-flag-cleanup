@@ -48,8 +48,8 @@ every other PRD.
 
 | Flag key | Rollout | Route | Expected verdict | Why |
 |---|---|---|---|---|
-| `loyalty_stamp_banner` | 0% | lifecycle / abandoned | `safe_to_remove` | Deprecated, quiet in the window (or activity only before it). Collapses by deleting the gated branch |
-| `express_pay_hint` | 100% | lifecycle / settled | `safe_to_remove` | Deprecated, heavy traffic all returning the same value. Collapses by keeping the gated branch |
+| `size_guide_panel` | 0% (after kill) | lifecycle | `safe_to_remove` | Deprecated delete_gated fixture on Listing. Collapses by deleting the gated panel. Latest E2E: PR #11 |
+| `search_typo_suggest` | 100% | lifecycle | `safe_to_remove` | Deprecated keep_gated fixture on Search. Collapses by keeping the tip, removing flag plumbing. Latest E2E: PR #11 |
 | `checkout_redesign` | 100% | abandoned | `blocked` | Zero evaluations from any current build, but still evaluated several hundred times a day by an older build that retains a small share of live sessions |
 | `shipping_estimator` | 60% | settled | `blocked` | Partial rollout abandoned mid-ramp. Traffic is split across two variations, so there is no single value to collapse to |
 | `wishlist` | 0% | abandoned | `blocked` | Has living descendants that have not been removed yet |
@@ -58,10 +58,11 @@ every other PRD.
 | `search_ranking_v2` | 5% | abandoned | `inconclusive` | Sparse traffic, a handful of evaluations across the whole window, not enough evidence either way |
 
 The agent may remove **any** independently `safe_to_remove` flag with
-`collapse_direction != none`. There is no hardcoded allowlist of two keys. The pair above
-(and historically `promo_banner_2025` / `one_click_buy` in early PRs) exists so delete vs
-keep collapse both appear in one plan. After a successful cleanup those YAML keys leave
-the project until restored for a re-demo.
+`collapse_direction != none`. There is no hardcoded allowlist of two keys. The removable
+pair exists so delete vs keep collapse both appear in one plan. After a successful cleanup
+those YAML keys leave the project until restored for a re-demo. Earlier pairs:
+`loyalty_stamp_banner` / `express_pay_hint` (#9), `promo_banner_2025` / `one_click_buy`
+(#5/#6). Protocol: REST for code, MCP for model evidence (`PRD-07`).
 
 ## Why the nested case matters
 

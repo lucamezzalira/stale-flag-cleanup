@@ -13,10 +13,11 @@ Aligns with Tinybird `api.us-east.aws.tinybird.co`. Diagrams live in the root [`
 | ECS Fargate scout (ARM64, smaller) | Tinybird REST plan → S3 `plan.json` (no Bedrock, no MCP) |
 | ECS Fargate surgeon (ARM64) | REST re-verify + Bedrock edit + MCP evidence narrative + one PR |
 
-Agent host is **ECS Fargate under Step Functions** (EventBridge Scheduler nightly). CodeBuild is not the agent host.
 | S3 results bucket | Plan / surgeon result handoff |
 | EventBridge Scheduler `stale-flags-sfn-nightly-utc` | Midnight UTC StartExecution |
 | IAM role `stale-flags-gha-publish` | GitHub Actions OIDC for publish-flags |
+
+Agent host is **ECS Fargate under Step Functions** (EventBridge Scheduler nightly). CodeBuild is not the agent host.
 
 Merge gate = GitHub PR notifications. No SNS topic.
 

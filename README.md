@@ -47,26 +47,31 @@ flowchart TB
 
   subgraph agent [Background agent]
     SCOUT[scout Tinybird REST]
-    SURG[surgeon Bedrock + REST re-verify]
+    SURG[surgeon harness REST re-verify]
+    EDIT[surgeon edit Converse no tools]
+    EVID[surgeon evidence Converse]
     GH[GitHub PR into demo]
     LOG[cleanup_decision_log]
     CAND --> SCOUT
-    SAFE --> SCOUT
+    RPT --> SCOUT
     SAFE -->|REST re-verify| SURG
     SCOUT -->|verdict + reason| LOG
     SCOUT -->|safe_to_remove only| SURG
-    SURG -->|collapse YAML + app code| GH
+    SURG -->|gates pass| EDIT
+    EDIT -->|YAML + app collapse| GH
+    SURG -->|Decision section| GH
+    EVID -->|Evidence narrative| GH
     SURG --> LOG
   end
 
   subgraph humans [Human surfaces]
     CLI[tools/report]
-    MCP[Tinybird MCP]
-    QA[docs/qa-agent.md + Cursor canvas]
+    MCP[Tinybird MCP scoped token]
+    QA[docs/qa-agent.md + canvas]
     RPT --> CLI
     RPT --> MCP
     SAFE --> MCP
-    SURG -->|evidence narrative| MCP
+    MCP --> EVID
     GH --> QA
   end
 ```
@@ -123,7 +128,9 @@ flowchart LR
   ScoutECS -->|REST pipes| PIPES
   ScoutECS -->|plan.json| S3R
   S3R --> SFN
-  SurgECS -->|Converse| BR
+  SurgECS -->|REST re-verify| PIPES
+  SurgECS -->|edit Converse no tools| BR
+  SurgECS -->|evidence Converse + MCP| PIPES
   SurgECS -->|gh pr create| PR
   SurgECS -->|appendDecisions| EV
   PR -->|human merge| DEMO
@@ -137,7 +144,7 @@ flowchart LR
   CFD -->|datafileUrl| USER
 ```
 
-Split Fargate images: scout (no Bedrock) and surgeon (Bedrock + gates). Step Functions: Scout → Choice → one Surgeon session → Succeeded. Merge gate = GitHub PR notifications (no SNS).
+Split Fargate images: scout (REST only, no Bedrock, no MCP) and surgeon (REST re-verify + Bedrock edit without tools + MCP evidence narrative). Step Functions: Scout → Choice → one Surgeon session → Succeeded. Merge gate = GitHub PR notifications (no SNS).
 
 ## Sequence: nightly / on-demand cleanup
 
@@ -166,11 +173,14 @@ sequenceDiagram
     SFN-->>SFN: NothingToDo
   else plan non-empty
     SFN->>Surg: PLAN_S3_URI
-    loop each planned flag locally
-      Surg->>Bedrock: Converse edit loop
+    loop each planned flag
+      Surg->>TB: REST flag_safety_check re-verify
+      Surg->>Bedrock: edit Converse (no tools)
       Surg->>Surg: gates
     end
-    Surg->>GH: one push + one PR all-or-nothing
+    Surg->>TB: MCP call_endpoint evidence (allowlisted)
+    Surg->>Bedrock: evidence Converse
+    Surg->>GH: one PR Decision REST + Evidence MCP
     Surg->>S3: surgeon-result.json
   end
   Note over GH: Human merges (agent never merges)
@@ -199,7 +209,11 @@ sequenceDiagram
 | Model | n/a | Sonnet 4.5 Converse (edit without tools; evidence with MCP tools) |
 | QA | Ad hoc | Production-bar playbook + new-flag E2E |
 
-Refusals stay. Safe removals are whatever Tinybird marks safe (E2E fixtures: `loyalty_stamp_banner`, `express_pay_hint`).
+Refusals stay. Safe removals are whatever Tinybird marks safe. Latest E2E pair (PR #11,
+merged): `size_guide_panel` (`delete_gated_branch`) and `search_typo_suggest`
+(`keep_gated_branch`). Earlier pairs: `loyalty_stamp_banner` / `express_pay_hint` (#9),
+`promo_banner_2025` / `one_click_buy` (#5/#6). Restore Featurevisor fixtures + seed
+recipes before a re-demo.
 
 ### Parts in this repo
 
@@ -215,7 +229,8 @@ Refusals stay. Safe removals are whatever Tinybird marks safe (E2E fixtures: `lo
 | `packages/verdicts` | TS mirror of safety rules + unit tests |
 | `packages/local-store` | `.local-data` NDJSON + Tinybird truncate/append helpers |
 | `agent/scout` | Tinybird-backed scout; `--emit-json` for Step Functions |
-| `agent/surgeon` | Bedrock (or heuristic) collapse + gates + PR |
+| `agent/surgeon` | REST re-verify + Bedrock edit (no tools) + MCP evidence + gates + PR |
+| `docs/handoff-mcp-for-claude.md` | Protocol handoff for article / Claude |
 | `tools/reset` | Reset `demo`, truncate Tinybird, reseed |
 | `infra/` | CDK stack (web, datafiles, SFN + Fargate, scheduler, OIDC role) |
 | `.github/workflows/publish-flags.yml` | Push to `main`/`demo` → S3 + CloudFront |
@@ -242,7 +257,9 @@ pnpm report
 SCOUT_SOURCE=tinybird pnpm agent:scout -- --dry-run
 ```
 
-You should see `loyalty_stamp_banner` and `express_pay_hint` as `safe_to_remove` (and any other independently safe leaves), plus refusals for wishlist / shipping / search / checkout_redesign. Scout logs `source=tinybird-rest`.
+With removable fixtures present you should see independently `safe_to_remove` leaves (latest
+pair was `size_guide_panel` + `search_typo_suggest`) plus refusals for wishlist / shipping /
+`search_ranking_v2` / `checkout_redesign`. Scout logs `source=tinybird-rest`.
 
 ```bash
 export VITE_DATAFILE_URL=http://127.0.0.1:4099/production/featurevisor-all.json
@@ -290,7 +307,7 @@ See `.env.example`. Important ones:
 ```bash
 SCOUT_SOURCE=tinybird pnpm agent:scout -- --dry-run
 pnpm agent:run
-pnpm agent:surgeon -- --flag=promo_banner_2025 --dry-run
+pnpm agent:surgeon -- --flag=search_ranking_v2 --dry-run
 pnpm demo:reset
 pnpm infra:agent-run
 ```
@@ -305,8 +322,11 @@ packages/local-store     Local NDJSON + Tinybird helpers
 featurevisor             Flag YAML
 tinybird                 Datasources + pipes
 tools/*                  seed, report, publish-*, reset
-agent/scout|surgeon      Background agent
+agent/scout|surgeon      Background agent (REST / MCP per PRD-07)
 infra                    AWS CDK (us-east-1)
 .github/workflows        publish-flags OIDC sync
 docs/qa-agent.md         Manual QA playbook
+docs/handoff-mcp-for-claude.md   Protocol handoff for article / Claude
+docs/captures/article-2026-10/   Real browser captures + INDEX
+prds/PRD-07-protocol-alignment.md
 ```
