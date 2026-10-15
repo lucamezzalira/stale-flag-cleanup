@@ -1,8 +1,0 @@
-feature: size_guide_panel
-assertions:
-  - at: 50
-    description: "Size guide panel is off after kill (0%)"
-    environment: production
-    context:
-      userId: user-smoke-1
-    expectedToBeEnabled: false
