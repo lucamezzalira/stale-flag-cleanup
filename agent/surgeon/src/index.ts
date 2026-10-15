@@ -661,11 +661,97 @@ function writeSurgeonResult(body: unknown): void {
   console.log(`SURGEON_RESULT_JSON:${JSON.stringify(body)}`);
 }
 
+type SafetyCheckRow = {
+  flag_key: string;
+  verdict: string;
+  collapse_direction: string;
+  target_value?: string;
+};
+
+/** REST-only Tinybird pipe call (mirrors scout; no MCP fallback). */
+async function callTinybirdEndpoint<T>(
+  endpointName: string,
+  params: Record<string, string | number> = {},
+): Promise<T[]> {
+  const host =
+    process.env.TINYBIRD_API_HOST ?? "https://api.us-east.aws.tinybird.co";
+  const token = process.env.TINYBIRD_TOKEN ?? "";
+  if (!token) {
+    throw new Error("TINYBIRD_TOKEN is required to re-verify flags before edit");
+  }
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
+  const res = await fetch(
+    `${host.replace(/\/$/, "")}/v0/pipes/${endpointName}.json?${qs}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Tinybird pipe ${endpointName}: ${res.status} ${text}`);
+  }
+  const json = JSON.parse(text) as { data?: T[] };
+  return json.data ?? [];
+}
+
+/**
+ * Live re-check against flag_safety_check before any edit.
+ * Aborts if the plan/CLI payload is stale relative to Tinybird.
+ */
+async function reverifyFlagSafety(payload: Payload): Promise<void> {
+  assertFlagKey(payload.flag_key);
+  console.log(
+    `Re-verifying ${payload.flag_key} via flag_safety_check?key=…`,
+  );
+  let rows: SafetyCheckRow[];
+  try {
+    rows = await callTinybirdEndpoint<SafetyCheckRow>("flag_safety_check", {
+      key: payload.flag_key,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `flag_safety_check failed for ${payload.flag_key}: ${msg}`,
+    );
+  }
+  const live = rows[0];
+  if (!live) {
+    throw new Error(
+      `flag_safety_check returned no data for ${payload.flag_key}; aborting edit`,
+    );
+  }
+  if (live.verdict !== "safe_to_remove") {
+    throw new Error(
+      `Live verdict for ${payload.flag_key} is ${live.verdict}, not safe_to_remove; aborting edit`,
+    );
+  }
+  if (live.verdict !== payload.verdict) {
+    throw new Error(
+      `Live verdict for ${payload.flag_key} is ${live.verdict}, plan had ${payload.verdict}; aborting edit`,
+    );
+  }
+  if (live.collapse_direction !== payload.collapse_direction) {
+    throw new Error(
+      `Live collapse_direction for ${payload.flag_key} is ${live.collapse_direction}, plan had ${payload.collapse_direction}; aborting edit`,
+    );
+  }
+  const liveTarget = live.target_value ?? "";
+  const planTarget = payload.target_value ?? "";
+  if (liveTarget && planTarget && liveTarget !== planTarget) {
+    throw new Error(
+      `Live target_value for ${payload.flag_key} is ${liveTarget}, plan had ${planTarget}; aborting edit`,
+    );
+  }
+  console.log(
+    `Re-verify ok: ${payload.flag_key} verdict=${live.verdict} collapse=${live.collapse_direction}`,
+  );
+}
+
 async function applyFlagLocally(payload: Payload): Promise<void> {
   assertFlagKey(payload.flag_key);
   if (payload.collapse_direction === "none") {
     throw new Error(`Refusing collapse_direction=none for ${payload.flag_key}`);
   }
+  await reverifyFlagSafety(payload);
   deleteYaml(payload.flag_key);
   const files = findReferenceFiles(payload.flag_key);
   if (files.length === 0) {
@@ -871,6 +957,7 @@ async function runSingleFlagMode(): Promise<void> {
   );
 
   if (dryRun) {
+    await reverifyFlagSafety(payload);
     const files = findReferenceFiles(payload.flag_key);
     console.log("Would remove YAML + edit:");
     console.log(`  featurevisor/features/${payload.flag_key}.yml`);

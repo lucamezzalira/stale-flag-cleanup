@@ -35,11 +35,15 @@ An LLM-backed editor (Bedrock Converse Sonnet 4.5, with heuristic fallback), **o
 task for the whole plan**. It:
 
 1. Loads the plan from `PLAN_S3_URI` / `--plan-s3`.
-2. For each planned flag, collapses Featurevisor YAML + app call sites using the pipe's
+2. Before editing each flag, re-verifies live via Tinybird REST
+   `flag_safety_check?key=` (not `flag_key`). Aborts the whole plan (rewind, no PR) if
+   live `verdict` / `collapse_direction` (and non-empty `target_value`) no longer match
+   the plan payload, or if the request fails / returns empty. Dry-run still re-verifies.
+3. For each planned flag, collapses Featurevisor YAML + app call sites using the pipe's
    `collapse_direction` / `target_value`. Never infers collapse from the code alone.
-3. Runs validation gates per flag. All-or-nothing: if any flag fails, rewind local edits,
+4. Runs validation gates per flag. All-or-nothing: if any flag fails, rewind local edits,
    write failure, and **do not** push or open a PR.
-4. If every flag passes, push one branch and open **one** multi-flag pull request into
+5. If every flag passes, push one branch and open **one** multi-flag pull request into
    `demo`. Never merges.
 
 Single-flag `--flag=` mode remains for local dry runs.
@@ -140,6 +144,8 @@ truncate needs an admin / `.tinyb` token.
   (all-or-nothing). E2E fixtures use keys such as `loyalty_stamp_banner` /
   `express_pay_hint`, not a hardcoded classic-pair allowlist or `candidates.length === 2`
 - Collapse direction comes from Tinybird, never inferred ad hoc in the surgeon
+- Surgeon re-verifies each flag with `flag_safety_check?key=` immediately before edit;
+  stale plan payloads abort with no PR
 - The PR removes each planned flag from YAML, test spec, and call sites, and passes all
   five gates (REVISION-only = fail)
 - `cleanup_decision_log` records every candidate for the run, including refusals
