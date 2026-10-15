@@ -75,6 +75,14 @@ export const DEFAULT_SAFETY_PARAMS = {
   environment: "production",
 } as const;
 
+/** Format evaluating_share (0..1 fraction) as a percentage string for narratives. */
+export function formatEvaluatingSharePct(share: number): string {
+  const pct = share * 100;
+  if (!Number.isFinite(pct) || pct <= 0) return "0%";
+  if (Math.abs(pct - Math.round(pct)) < 0.05) return `${Math.round(pct)}%`;
+  return `${pct.toFixed(1)}%`;
+}
+
 type ResolvedParams = {
   window_days: number;
   min_session_share: number;
@@ -216,24 +224,29 @@ export function aggregateWindow(
       (evalByBuild.get(a.build_id) ?? 0) + a.event_count,
     );
   }
+  // evaluating_share = sum of latest-snapshot session_share for builds that
+  // evaluated the flag. Same calendar day → fraction in [0, 1].
+  const latestSnapshot = store.adoption
+    .filter((b) => b.app === "web")
+    .map((b) => b.snapshot_date)
+    .sort()
+    .at(-1);
   const liveHits: FlagWindowSummary["liveHits"] = [];
   for (const [buildId, count] of evalByBuild) {
-    const shares = store.adoption.filter(
+    if (count <= 0 || !latestSnapshot) continue;
+    const latest = store.adoption.find(
       (b) =>
         b.build_id === buildId &&
         b.app === "web" &&
-        inWindow(b.snapshot_date, params.windowStart, params.now),
+        b.snapshot_date === latestSnapshot,
     );
-    const maxShare = shares.reduce((m, s) => Math.max(m, s.session_share), 0);
-    const released = shares.map((s) => s.released_at).sort()[0] ?? "";
-    if (maxShare >= params.min_session_share && count > 0) {
-      liveHits.push({
-        build_id: buildId,
-        session_share: maxShare,
-        evaluated_events: count,
-        released_at: released,
-      });
-    }
+    if (!latest || latest.session_share < params.min_session_share) continue;
+    liveHits.push({
+      build_id: buildId,
+      session_share: latest.session_share,
+      evaluated_events: count,
+      released_at: latest.released_at,
+    });
   }
 
   const firstSeen =
@@ -293,6 +306,10 @@ export function runSafetyCheck(
   baseEvidence.variation_counts = Object.fromEntries(win.variationCounts);
   baseEvidence.descendants = win.descendants;
   baseEvidence.live_build_hits = win.liveHits;
+  baseEvidence.evaluating_share = win.evaluatingShare;
+  baseEvidence.evaluating_share_pct = formatEvaluatingSharePct(
+    win.evaluatingShare,
+  );
   baseEvidence.first_seen = win.firstSeen;
   baseEvidence.datafile_revision = def.datafile_revision;
 
@@ -353,11 +370,12 @@ export function runSafetyCheck(
     const hit = [...win.liveHits].sort(
       (a, b) => b.session_share - a.session_share,
     )[0]!;
+    const pct = formatEvaluatingSharePct(win.evaluatingShare);
     const share = win.evaluatingShare.toFixed(3);
     const reason =
       def.deprecated === 1 || def.archived === 1
-        ? `Featurevisor marks ${params.flag_key} as ${def.deprecated ? "deprecated" : "archived"}, but it is still evaluated by a live minority build cohort (evaluating_share=${share}). Deprecation is a request; the evidence does not yet permit removal.`
-        : `Flag ${params.flag_key} is still evaluated by live build ${hit.build_id} (released ${hit.released_at}, session_share=${hit.session_share.toFixed(3)}, evaluating_share=${share}).`;
+        ? `Featurevisor marks ${params.flag_key} as ${def.deprecated ? "deprecated" : "archived"}, but builds serving ${pct} of current sessions still evaluate it. Deprecation makes a flag a candidate; the evidence does not yet permit removal.`
+        : `Flag ${params.flag_key} is still evaluated by builds serving ${pct} of current sessions (build ${hit.build_id}, released ${hit.released_at}, evaluating_share=${share}).`;
     return buildVerdict(
       params.flag_key,
       def,

@@ -97,20 +97,34 @@ SQL >
     GROUP BY fda.build_id
     HAVING evaluated_events > 0
 
+NODE latest_adoption_snapshot
+SQL >
+    SELECT max(snapshot_date) AS snapshot_date
+    FROM build_adoption
+    WHERE app = 'web'
+
+NODE latest_adoption
+SQL >
+    SELECT
+        b.build_id AS build_id,
+        toFloat64(b.session_share) AS session_share,
+        b.released_at AS released_at
+    FROM build_adoption AS b
+    CROSS JOIN latest_adoption_snapshot AS ls
+    WHERE b.app = 'web'
+      AND b.snapshot_date = ls.snapshot_date
+
 NODE live_hits
 SQL >
     %
     SELECT
         e.build_id,
         e.evaluated_events,
-        max(toFloat64(b.session_share)) AS session_share,
-        min(b.released_at) AS released_at
+        a.session_share AS session_share,
+        a.released_at AS released_at
     FROM eval_by_build AS e
-    INNER JOIN build_adoption AS b
-        ON b.build_id = e.build_id AND b.app = 'web'
-       AND b.snapshot_date >= toDate(now() - toIntervalDay({{ Int32(window_days, 90) }}))
-    GROUP BY e.build_id, e.evaluated_events
-    HAVING session_share >= {{ Float32(min_session_share, 0.005) }}
+    INNER JOIN latest_adoption AS a ON a.build_id = e.build_id
+    WHERE a.session_share >= {{ Float32(min_session_share, 0.005) }}
 
 NODE live_summary
 SQL >
@@ -173,8 +187,8 @@ SQL >
                 concat('Flag ', {{ String(key) }}, ' is mid-ramp at ', toString(d.rollout_percentage), '% (or multi-variation) with no single target_value, so the code cannot be collapsed safely.'),
             coalesce(a.evaluated_events, 0) > 0 AND coalesce(ls.live_hit_count, 0) > 0 AND coalesce(ls.evaluating_share, 0) < 0.5,
                 if(d.deprecated = 1 OR d.archived = 1,
-                    concat('Featurevisor marks ', {{ String(key) }}, ' as ', if(d.deprecated = 1, 'deprecated', 'archived'), ', but it is still evaluated by a live minority build cohort (evaluating_share=', toString(round(coalesce(ls.evaluating_share, 0), 3)), '). Deprecation is a request; the evidence does not yet permit removal.'),
-                    concat('Flag ', {{ String(key) }}, ' is still evaluated by a live minority build cohort (evaluating_share=', toString(round(coalesce(ls.evaluating_share, 0), 3)), ').')),
+                    concat('Featurevisor marks ', {{ String(key) }}, ' as ', if(d.deprecated = 1, 'deprecated', 'archived'), ', but builds serving ', toString(round(coalesce(ls.evaluating_share, 0) * 100, 1)), '% of current sessions still evaluate it. Deprecation makes a flag a candidate; the evidence does not yet permit removal.'),
+                    concat('Flag ', {{ String(key) }}, ' is still evaluated by builds serving ', toString(round(coalesce(ls.evaluating_share, 0) * 100, 1)), '% of current sessions (evaluating_share=', toString(round(coalesce(ls.evaluating_share, 0), 3)), ').')),
             (coalesce(a.evaluated_events, 0) + coalesce(a.blocked_events, 0)) > 0
               AND (coalesce(a.evaluated_events, 0) + coalesce(a.blocked_events, 0)) < {{ Int32(min_events_floor, 20) }},
                 concat('Flag ', {{ String(key) }}, ' has only ', toString(coalesce(a.evaluated_events, 0) + coalesce(a.blocked_events, 0)), ' events in the window, which is too thin to support a removal decision.'),

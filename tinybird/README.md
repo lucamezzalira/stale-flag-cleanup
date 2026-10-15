@@ -39,5 +39,11 @@ Order in `flag_safety_check` / `cleanup_report` `multiIf` (and `packages/verdict
 9. Settled (single variation, rollout 0/100, enough events, share ≥ 0.5) → `safe_to_remove`, route `settled`
 10. Otherwise → `inconclusive`
 
-**Pitfall:** Lifecycle markers made flags eligible before live traffic was checked (PR #11);
-deprecation now only makes a flag a candidate.
+### `evaluating_share`
+
+Fraction in `[0, 1]`: sum of each evaluating build's `session_share` on the **most recent**
+`build_adoption` snapshot date (not `max` across the window). A value above 1 is a bug.
+
+**Pitfalls:** Lifecycle markers made flags eligible before live traffic was checked.
+PR #11's evidence narrative misreported a summed metric as a percentage. Metrics exposed to
+models must mean what their names say.

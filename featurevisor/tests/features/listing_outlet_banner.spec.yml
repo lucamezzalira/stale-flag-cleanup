@@ -1,0 +1,8 @@
+feature: listing_outlet_banner
+assertions:
+  - at: 50
+    description: "Outlet banner stays off at 0% rollout"
+    environment: production
+    context:
+      userId: user-smoke-1
+    expectedToBeEnabled: false

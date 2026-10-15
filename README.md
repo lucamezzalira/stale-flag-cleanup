@@ -196,8 +196,9 @@ sequenceDiagram
 4. **Tinybird** pipes are the only eligibility API. Scout and surgeon harness call them over **REST**. The surgeon evidence model (and humans) use **Tinybird MCP**.
    Verdict order (PRD-08): structural checks → live minority / thin evidence → **then**
    lifecycle (`deprecated` / `archived`) → abandoned / settled. Deprecation is a request;
-   evidence is the permission. Pitfall: before PRD-08, lifecycle sat above minority-build
-   checks (PR #11 removed a still-live deprecated flag).
+   evidence is the permission. `evaluating_share` is a fraction in `[0, 1]` (latest adoption
+   snapshot per evaluating build). Pitfalls: lifecycle used to sit above evidence checks;
+   PR #11's narrative misreported a summed metric as a percentage.
 5. **Scout** plans independently `safe_to_remove` flags (`collapse_direction != none`) into S3 `plan.json`. It does not invent nest deletes for parent-gated inconclusive children.
 6. **Surgeon** re-verifies each flag over REST, applies the whole plan in one Fargate session, then opens **one** PR only if every flag passes gates. Evidence narrative is a separate MCP-backed Converse call after gates.
 7. **Humans** merge. Publish syncs CDN. QA: `docs/qa-agent.md`.
@@ -214,10 +215,11 @@ sequenceDiagram
 | QA | Ad hoc | Production-bar playbook + new-flag E2E |
 
 Refusals stay. Safe removals are whatever Tinybird marks safe. Current fixtures (PRD-08):
-`catalog_clearance_rail` (abandoned / delete_gated), `checkout_trust_badges` (settled /
+`listing_outlet_banner` (abandoned / delete_gated), `checkout_secure_seal` (settled /
 keep_gated), `nav_winter_ribbon` (deprecated but live minority → **blocked**). Earlier
-pairs: `size_guide_panel` / `search_typo_suggest` (#11), `loyalty_stamp_banner` /
-`express_pay_hint` (#9), `promo_banner_2025` / `one_click_buy` (#5/#6).
+pairs: `catalog_clearance_rail` / `checkout_trust_badges` (#12), `size_guide_panel` /
+`search_typo_suggest` (#11), `loyalty_stamp_banner` / `express_pay_hint` (#9),
+`promo_banner_2025` / `one_click_buy` (#5/#6).
 
 ### Parts in this repo
 

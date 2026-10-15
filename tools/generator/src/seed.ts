@@ -193,11 +193,11 @@ async function main(): Promise<void> {
       const isSticky = b.id === stickyId;
       const isModern = !isSticky;
 
-      // checkout_trust_badges: heavy settled traffic on modern builds (keep_gated, not deprecated)
+      // checkout_secure_seal: heavy settled traffic on modern builds (keep_gated, not deprecated)
       if (isModern) {
         bump(
           ds,
-          "checkout_trust_badges",
+          "checkout_secure_seal",
           b.id,
           "evaluated",
           "true",
@@ -272,27 +272,28 @@ async function main(): Promise<void> {
         );
       }
 
-      // catalog_clearance_rail: only before window (abandoned / delete_gated, not deprecated)
+      // listing_outlet_banner: only before window (abandoned / delete_gated, not deprecated)
       // search_ranking_v2: sparse — sprinkle later
     }
   }
 
-  // catalog_clearance_rail: activity ending before window (abandoned evidence-only)
+  // listing_outlet_banner: activity ending before window (abandoned evidence-only)
   for (let offset = days + 40; offset > days + 5; offset--) {
     const day = new Date(now);
     day.setUTCDate(day.getUTCDate() - offset);
     const ds = dayString(day);
     const b = builds[0]!;
-    bump(ds, "catalog_clearance_rail", b.id, "evaluated", "false", 50);
+    bump(ds, "listing_outlet_banner", b.id, "evaluated", "false", 50);
   }
 
-  // checkout_trust_badges: also appear before the window so first_seen is not inside it
+  // checkout_secure_seal: also appear before the window so first_seen is not inside it
   for (let offset = days + 40; offset > days + 5; offset--) {
     const day = new Date(now);
     day.setUTCDate(day.getUTCDate() - offset);
     const ds = dayString(day);
-    const b = builds[builds.length - 1] ?? builds[0]!;
-    bump(ds, "checkout_trust_badges", b.id, "evaluated", "true", 80);
+    const modern = builds.filter((b) => b.id !== stickyId);
+    const b = modern[0] ?? builds[0]!;
+    bump(ds, "checkout_secure_seal", b.id, "evaluated", "true", 80);
   }
 
   // search_ranking_v2: 5–15 evaluated across whole window
@@ -329,8 +330,14 @@ async function main(): Promise<void> {
   const report = cleanupReport(store, { window_days: days });
   console.log("\nVerdict matrix after seed:");
   for (const row of report) {
+    const share = Number(row.evidence.evaluating_share ?? 0);
+    if (share > 1.0001) {
+      throw new Error(
+        `evaluating_share out of range for ${row.flag_key}: ${share}`,
+      );
+    }
     console.log(
-      `  ${row.flag_key.padEnd(24)} ${row.verdict.padEnd(16)} ${row.collapse_direction.padEnd(20)} ${row.route}`,
+      `  ${row.flag_key.padEnd(24)} ${row.verdict.padEnd(16)} ${row.collapse_direction.padEnd(20)} ${row.route}  share=${share.toFixed(3)}`,
     );
   }
   console.log(`\nRows: activity=${activity.length} adoption=${adoption.length} defs=${definitions.length}`);

@@ -35,8 +35,33 @@ type SafetyCheckRow = {
   target_value?: string;
   evaluated_events?: number;
   blocked_events?: number;
+  evaluating_share?: number;
   datafile_revision?: string;
 };
+
+/** Format evaluating_share (0..1) as a percentage for model-facing narratives. */
+function formatEvaluatingSharePct(share: number | undefined): string {
+  if (share === undefined || share === null || !Number.isFinite(share)) {
+    return "n/a";
+  }
+  const pct = share * 100;
+  if (pct <= 0) return "0%";
+  if (Math.abs(pct - Math.round(pct)) < 0.05) return `${Math.round(pct)}%`;
+  return `${pct.toFixed(1)}%`;
+}
+
+function evidenceDisplayRows(decisions: SafetyCheckRow[]) {
+  return decisions.map((d) => ({
+    flag_key: d.flag_key,
+    evaluated_events: d.evaluated_events ?? 0,
+    blocked_events: d.blocked_events ?? 0,
+    evaluating_share: d.evaluating_share ?? 0,
+    evaluating_share_pct: formatEvaluatingSharePct(d.evaluating_share),
+    route: d.route,
+    target_value: d.target_value,
+    datafile_revision: d.datafile_revision,
+  }));
+}
 
 type Payload = {
   flag_key: string;
@@ -988,14 +1013,20 @@ async function generateEvidenceNarrative(
     mcp = await connectTinybirdMcp();
 
     const flagList = decisions.map((d) => d.flag_key).join(", ");
+    const display = evidenceDisplayRows(decisions);
     const system = `You write a short evidence narrative for a flag-cleanup pull request.
 The safety decision is already made by deterministic harness code and cannot be changed by you.
 Use the tinybird_call_endpoint tool to fetch evidence per flag (flag_safety_check with params.key, and/or cleanup_report).
+When mentioning session share or evaluating share, quote evaluating_share_pct from the harness-provided display values exactly (for example "96%"). Never recompute a percentage from a raw fraction, and never treat a raw fraction greater than 1 as a percentage.
 Write plain sentences only. No speculation. Do not invent numbers. Do not recommend keeping or removing flags.
 Do not output JSON, verdicts, collapse directions, or decision language. Evidence narrative only.`;
 
     const userText = `Write an evidence narrative for these flags already approved for removal: ${flagList}.
-Call Tinybird for each flag's live evidence, then summarize what the endpoints returned in plain sentences.`;
+
+Harness-formatted display values (authoritative for any percentages you quote):
+${JSON.stringify(display, null, 2)}
+
+Call Tinybird for each flag's live evidence, then summarize what the endpoints returned in plain sentences. Quote evaluating_share_pct whenever you mention share.`;
 
     const messages: Message[] = [
       { role: "user", content: [{ text: userText }] },

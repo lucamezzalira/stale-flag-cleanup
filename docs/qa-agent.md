@@ -12,8 +12,8 @@ Current safe fixtures for a green demo:
 
 | Flag | Collapse / verdict | BEFORE UI | AFTER UI |
 |---|---|---|---|
-| `catalog_clearance_rail` | abandoned / `delete_gated_branch` | Listing clearance (off at 0%) | Flag + panel plumbing **gone** |
-| `checkout_trust_badges` | settled / `keep_gated_branch` | Checkout trust badges | Badges **kept**, flag plumbing **gone** |
+| `listing_outlet_banner` | abandoned / `delete_gated_branch` | Listing outlet (off at 0%) | Flag + panel plumbing **gone** |
+| `checkout_secure_seal` | settled / `keep_gated_branch` | Checkout secure seal | Seal text **kept**, flag plumbing **gone** |
 | `nav_winter_ribbon` | **blocked** (deprecated + live minority) | Listing winter ribbon | **Still present** (must not be in PR) |
 
 Refusals (still present, no PR): `wishlist` (+ children), `checkout_redesign`, `shipping_estimator`, `search_ranking_v2`, `nav_winter_ribbon`.
