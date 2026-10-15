@@ -36,8 +36,10 @@ definitions, adoption, or decisions in the browser bundle.
 `flag_daily_activity_mv` writes to it. Seed expands daily aggregates into
 `flag_evaluations` so the MV repopulates activity.
 
-After changing token declarations, rotate any retired token (for example the old
-`append_events`) with `tb --cloud token rm <name>` so leaked values stop working.
+Undeclared resource tokens are dropped on deploy. The old `append_events` token was
+removed with the PRD-10 split and returns 403 on Events API. If you ever retire another
+token, confirm with an append probe, then `tb --cloud token rm <name>` (or refresh) so
+leaked JWT values stop working.
 
 ### Decision log
 

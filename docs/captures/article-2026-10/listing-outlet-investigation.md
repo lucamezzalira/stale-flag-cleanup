@@ -1,23 +1,31 @@
 # listing_outlet_banner vs live shop evaluations
 
+Investigation for PRD-09 (pre–PRD-10 shop build). Flag removed in PR #14.
+
 ## Questions
 
 1. Does the CloudFront shop send events to Tinybird?
 2. If yes, why did safety check count zero evaluated events?
 3. Is badge text `evaluated` accurate for a flag that returns false?
 
-## Answers
+## Answers (at investigation time)
 
-1. **No.** Production bundle has `eventsUrl:""` and `eventsToken:""`. Workspace
-   `flag_evaluations` and `session_beacons` have 0 rows.
-2. N/A for live events. Synthetic `flag_daily_activity` for this flag is entirely
-   **before** the 90-day window (1750 events, 2026-06-07..2026-07-11). In-window count is 0,
-   so abandoned was correct for seeded data.
-3. **Yes for the SDK.** FlagCallout prints the Featurevisor outcome (`evaluated` means the
-   page asked and got a result, including `false` / off). It does **not** mean Tinybird
-   ingested a row.
+1. **No (then).** That CloudFront bundle baked empty `eventsUrl` / `eventsToken`.
+   Workspace `flag_evaluations` / `session_beacons` had no live rows from the shop.
+2. N/A for live events. Synthetic activity for this flag was entirely **before** the
+   90-day window, so in-window evaluated count was 0 (abandoned was correct for seed).
+3. **Yes for the SDK.** FlagCallout prints the Featurevisor outcome (`evaluated` means
+   the page asked and got a result, including `false` / off). It does **not** mean
+   Tinybird ingested a row.
 
-## Choice
+## Current state (PRD-10+)
 
-Document the gap in `README.md` (PRD-09 option 2). Do not reseed or reclassify the abandoned
-fixture. Correct article copy that claims the live shop streams evaluations into Tinybird.
+- Shop ships scoped `browser_events` (`VITE_TINYBIRD_BROWSER_EVENTS_TOKEN`) for
+  evaluations + beacons only. It cannot append `flag_definitions` or decisions.
+- Agent eligibility still comes from **synthetic seed**, not from live shop traffic.
+- `listing_outlet_banner` is gone from Featurevisor / the datafile (PR #14).
+
+## Choice for the article
+
+Do not claim live shop streaming drove the agent’s removal decisions. Drop any TODO
+that still treats this investigation as open work.

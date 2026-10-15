@@ -2,11 +2,11 @@
 
 Background agent removes stale [Featurevisor](https://featurevisor.com) flags only after [Tinybird](https://www.tinybird.co) evidence says it is safe. Verdicts are ordered rules (SQL pipes in `tinybird/`, TypeScript mirror in `packages/verdicts`). Scout schedules. Surgeon collapses code and opens PRs into `demo`. Refusals are intentional.
 
-All telemetry that drives scout/surgeon decisions is **synthetic** (`tools/generator` →
-`flag_evaluations` → MV → `flag_daily_activity`). The CloudFront shop may ship
-`VITE_TINYBIRD_BROWSER_EVENTS_TOKEN` (scoped to evaluations + beacons only). FlagCallout
-text like `off · evaluated` means the SDK ran locally; live streaming needs those Vite
-env vars set at build time.
+Scout/surgeon decisions use **synthetic** history (`pnpm seed` → `flag_evaluations` → MV →
+`flag_daily_activity`). The CloudFront shop ships `VITE_TINYBIRD_BROWSER_EVENTS_TOKEN`
+(scoped `browser_events`: evaluations + beacons only; cannot append definitions or
+decisions). FlagCallout text like `off · evaluated` is the local SDK outcome; it is not
+proof that Tinybird ingested a row.
 
 Live demo (us-east-1):
 
@@ -148,7 +148,7 @@ flowchart LR
   CFD -->|datafileUrl| USER
 ```
 
-Split Fargate images: scout (REST only, no Bedrock, no MCP) and surgeon (REST re-verify + Bedrock edit without tools + MCP evidence narrative). Step Functions: Scout → Choice → one Surgeon session → Succeeded. Merge gate = GitHub PR notifications (no SNS).
+Split Fargate images: scout (REST only, no Bedrock, no MCP) and surgeon (REST re-verify + Bedrock edit without tools + MCP evidence narrative). Step Functions: overlap gate → Scout → Choice → one Surgeon session → Succeeded. Merge gate = GitHub branch protection + PR review. SNS `stale-flags-agent-failures` alerts on FAILED / TIMED_OUT / ABORTED only (not the merge gate).
 
 ## Sequence: nightly / on-demand cleanup
 
@@ -214,7 +214,7 @@ sequenceDiagram
 | Scout evidence | Local store / MCP-first | Tinybird REST only (`source=tinybird-rest`) |
 | Surgeon | Per-flag Map | One Fargate session, one multi-flag PR; REST re-verify; MCP evidence narrative |
 | Agent host | Early experiments | EventBridge → SFN → split ECS Fargate images |
-| Merge notify | SNS stub | GitHub PR notifications |
+| Merge notify | SNS stub (unused) | GitHub PR + branch protection; SNS only for agent failures |
 | Model | n/a | Sonnet 4.5 Converse (edit without tools; evidence with MCP tools) |
 | QA | Ad hoc | Production-bar playbook + new-flag E2E |
 
