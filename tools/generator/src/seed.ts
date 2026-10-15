@@ -193,11 +193,11 @@ async function main(): Promise<void> {
       const isSticky = b.id === stickyId;
       const isModern = !isSticky;
 
-      // express_pay_hint: heavy settled traffic on modern builds (keep_gated)
+      // search_typo_suggest: heavy settled traffic on modern builds (keep_gated)
       if (isModern) {
         bump(
           ds,
-          "express_pay_hint",
+          "search_typo_suggest",
           b.id,
           "evaluated",
           "true",
@@ -260,18 +260,18 @@ async function main(): Promise<void> {
         );
       }
 
-      // loyalty_stamp_banner: only before window (handled outside)
+      // size_guide_panel: only before window when deprecated+0% (handled outside)
       // search_ranking_v2: sparse — sprinkle later
     }
   }
 
-  // loyalty_stamp_banner: activity ending before window (delete_gated / abandoned)
+  // size_guide_panel: activity ending before window (delete_gated / abandoned)
   for (let offset = days + 40; offset > days + 5; offset--) {
     const day = new Date(now);
     day.setUTCDate(day.getUTCDate() - offset);
     const ds = dayString(day);
     const b = builds[0]!;
-    bump(ds, "loyalty_stamp_banner", b.id, "evaluated", "false", 50);
+    bump(ds, "size_guide_panel", b.id, "evaluated", "false", 50);
   }
 
   // search_ranking_v2: 5–15 evaluated across whole window

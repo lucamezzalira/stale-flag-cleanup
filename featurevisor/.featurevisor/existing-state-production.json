@@ -106,6 +106,24 @@
         }
       ],
       "hash": "Whqth7j0rI"
+    },
+    "search_typo_suggest": {
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 100000
+        }
+      ],
+      "hash": "n5nPNCyzgz"
+    },
+    "size_guide_panel": {
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 100000
+        }
+      ],
+      "hash": "TtTq6Rwm8A"
     }
   }
 }

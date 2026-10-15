@@ -1,0 +1,8 @@
+feature: search_typo_suggest
+assertions:
+  - at: 50
+    description: "Typo suggest is on for everyone"
+    environment: production
+    context:
+      userId: user-smoke-1
+    expectedToBeEnabled: true

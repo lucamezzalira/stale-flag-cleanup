@@ -1,0 +1,8 @@
+feature: size_guide_panel
+assertions:
+  - at: 50
+    description: "Size guide panel is on for everyone before kill"
+    environment: production
+    context:
+      userId: user-smoke-1
+    expectedToBeEnabled: true

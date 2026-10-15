@@ -12,8 +12,8 @@ Current safe fixtures for a green demo:
 
 | Flag | Collapse | BEFORE UI | AFTER UI |
 |---|---|---|---|
-| `loyalty_stamp_banner` | `delete_gated_branch` | Listing shows “Loyalty stamp card” | Banner **gone** |
-| `express_pay_hint` | `keep_gated_branch` | Checkout shows express pay hint | Hint **kept**, flag plumbing **gone** |
+| `size_guide_panel` | `delete_gated_branch` | Listing shows Size guide panel | Panel **gone** |
+| `search_typo_suggest` | `keep_gated_branch` | Search shows “Did you mean…” chip | Chip **kept**, flag plumbing **gone** |
 
 Refusals (still present, no PR): `wishlist` (+ children), `checkout_redesign`, `shipping_estimator`, `search_ranking_v2`.
 
