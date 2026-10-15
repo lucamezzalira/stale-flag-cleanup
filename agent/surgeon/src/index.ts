@@ -12,7 +12,9 @@ import { appendDecisions } from "@stale-flags/local-store";
 import {
   BedrockRuntimeClient,
   ConverseCommand,
+  type ContentBlock,
   type Message,
+  type ToolConfiguration,
 } from "@aws-sdk/client-bedrock-runtime";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -20,6 +22,21 @@ const root = path.resolve(__dirname, "../../..");
 const MAX_ATTEMPTS = 4;
 const MAX_LINE_DELTA = 0.65;
 const FLAG_KEY_RE = /^[a-z0-9_]+$/;
+const MCP_ALLOWED_ENDPOINTS = ["flag_safety_check", "cleanup_report"] as const;
+const MAX_MCP_TOOL_CALLS = 4;
+const MCP_EVIDENCE_TIMEOUT_MS = 90_000;
+
+type SafetyCheckRow = {
+  flag_key: string;
+  verdict: string;
+  route?: string;
+  reason?: string;
+  collapse_direction: string;
+  target_value?: string;
+  evaluated_events?: number;
+  blocked_events?: number;
+  datafile_revision?: string;
+};
 
 type Payload = {
   flag_key: string;
@@ -93,21 +110,62 @@ function run(cmd: string, args: string[]): boolean {
   return runCaptured(cmd, args).ok;
 }
 
-function fallbackBody(payload: Payload): string {
-  return `## Flag cleanup: \`${payload.flag_key}\`
+function decisionSection(
+  runIdValue: string,
+  decisions: SafetyCheckRow[],
+  gatesLine: string,
+): string {
+  const blocks = decisions.map((d) => {
+    const events =
+      d.evaluated_events === undefined || d.evaluated_events === null
+        ? "n/a"
+        : String(d.evaluated_events);
+    return `### \`${d.flag_key}\`
+- **Verdict:** ${d.verdict}
+- **Route:** ${d.route ?? "n/a"}
+- **Reason:** ${d.reason ?? ""}
+- **Collapse:** ${d.collapse_direction} (target_value=${d.target_value ?? ""})
+- **Evaluated events:** ${events}`;
+  });
+  return `## Decision (harness)
 
-**Verdict:** ${payload.verdict}
-**Collapse:** ${payload.collapse_direction} (target_value=${payload.target_value})
-**Run:** ${payload.run_id}
+Authoritative safety decision from Tinybird REST \`flag_safety_check\` re-verify. The model does not supply or alter this section.
 
-${payload.reason}
+**Run:** ${runIdValue}
+**Gates:** ${gatesLine}
 
-### Evidence
-\`\`\`json
-${JSON.stringify(payload.evidence, null, 2)}
-\`\`\`
+${blocks.join("\n\n")}
+`;
+}
 
-Gates: tsc, vite build, featurevisor lint/test, flag-key grep, security diff allowlist.
+function buildPrBody(opts: {
+  runIdValue: string;
+  titleLine: string;
+  decisions: SafetyCheckRow[];
+  evidenceNarrative: string;
+  mcpStatus: "ok" | "unavailable";
+  gatesLine?: string;
+}): string {
+  const gates =
+    opts.gatesLine ??
+    "tsc, vite build, featurevisor lint/test, flag-key grep, security diff allowlist";
+  const decision = decisionSection(opts.runIdValue, opts.decisions, gates);
+  const stamp = new Date().toISOString();
+  const footer =
+    opts.mcpStatus === "ok"
+      ? `\n\n_Retrieved via Tinybird MCP at ${stamp}. Endpoints: ${MCP_ALLOWED_ENDPOINTS.join(", ")}_.`
+      : "";
+  const evidence =
+    opts.mcpStatus === "ok"
+      ? opts.evidenceNarrative.trim()
+      : "Evidence narrative unavailable for this run.";
+  return `${opts.titleLine}
+
+${decision}
+
+## Evidence, retrieved via Tinybird MCP
+
+${evidence}${footer}
 `;
 }
 
@@ -661,13 +719,6 @@ function writeSurgeonResult(body: unknown): void {
   console.log(`SURGEON_RESULT_JSON:${JSON.stringify(body)}`);
 }
 
-type SafetyCheckRow = {
-  flag_key: string;
-  verdict: string;
-  collapse_direction: string;
-  target_value?: string;
-};
-
 function extractMcpText(result: unknown): string {
   const r = result as {
     content?: Array<{ type?: string; text?: string }>;
@@ -700,8 +751,8 @@ function extractMcpText(result: unknown): string {
   return text;
 }
 
-/** Tinybird MCP first (article surface), REST fallback. */
-async function callTinybirdEndpoint<T>(
+/** Harness safety decisions use Tinybird REST only. Non-2xx is a hard failure. */
+async function callTinybirdRest<T>(
   endpointName: string,
   params: Record<string, string | number> = {},
 ): Promise<T[]> {
@@ -711,71 +762,33 @@ async function callTinybirdEndpoint<T>(
   if (!token) {
     throw new Error("TINYBIRD_TOKEN is required to re-verify flags before edit");
   }
-
-  try {
-    console.log(`Tinybird MCP call_endpoint ${endpointName}`);
-    const { Client } = await import(
-      "@modelcontextprotocol/sdk/client/index.js"
-    );
-    const { StreamableHTTPClientTransport } = await import(
-      "@modelcontextprotocol/sdk/client/streamableHttp.js"
-    );
-    const url = new URL("https://mcp.tinybird.co");
-    url.searchParams.set("token", token);
-    url.searchParams.set("host", host);
-    const transport = new StreamableHTTPClientTransport(url);
-    const client = new Client({
-      name: "stale-flags-surgeon",
-      version: "0.1.0",
-    });
-    await client.connect(transport);
-    try {
-      const result = await client.callTool({
-        name: "call_endpoint",
-        arguments: {
-          endpoint_name: endpointName,
-          params,
-          response_format: "JSON",
-        },
-      });
-      const text = extractMcpText(result);
-      const parsed = JSON.parse(text) as { data?: T[] } | T[];
-      if (Array.isArray(parsed)) return parsed;
-      return parsed.data ?? [];
-    } finally {
-      await client.close().catch(() => undefined);
-    }
-  } catch (mcpErr) {
-    console.warn(
-      `Tinybird MCP failed (${mcpErr instanceof Error ? mcpErr.message : mcpErr}); falling back to REST`,
-    );
-    const qs = new URLSearchParams();
-    for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
-    const res = await fetch(
-      `${host.replace(/\/$/, "")}/v0/pipes/${endpointName}.json?${qs}`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-    const text = await res.text();
-    if (!res.ok) {
-      throw new Error(`Tinybird pipe ${endpointName}: ${res.status} ${text}`);
-    }
-    const json = JSON.parse(text) as { data?: T[] };
-    return json.data ?? [];
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
+  const res = await fetch(
+    `${host.replace(/\/$/, "")}/v0/pipes/${endpointName}.json?${qs}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Tinybird pipe ${endpointName}: ${res.status} ${text}`);
   }
+  const json = JSON.parse(text) as { data?: T[] };
+  return json.data ?? [];
 }
 
 /**
- * Live re-check against flag_safety_check before any edit (MCP-first).
+ * Live re-check against flag_safety_check over REST before any edit.
  * Aborts if the plan/CLI payload is stale relative to Tinybird.
+ * Returned row is authoritative evidence for the PR Decision section.
  */
-async function reverifyFlagSafety(payload: Payload): Promise<void> {
+async function reverifyFlagSafety(payload: Payload): Promise<SafetyCheckRow> {
   assertFlagKey(payload.flag_key);
   console.log(
-    `Re-verifying ${payload.flag_key} via Tinybird MCP flag_safety_check?key=…`,
+    `Re-verifying ${payload.flag_key} via Tinybird REST flag_safety_check?key=…`,
   );
   let rows: SafetyCheckRow[];
   try {
-    rows = await callTinybirdEndpoint<SafetyCheckRow>("flag_safety_check", {
+    rows = await callTinybirdRest<SafetyCheckRow>("flag_safety_check", {
       key: payload.flag_key,
     });
   } catch (err) {
@@ -790,6 +803,9 @@ async function reverifyFlagSafety(payload: Payload): Promise<void> {
       `flag_safety_check returned no data for ${payload.flag_key}; aborting edit`,
     );
   }
+  console.log(
+    `tinybird_rest endpoint=flag_safety_check flag=${payload.flag_key} verdict=${live.verdict}`,
+  );
   if (live.verdict !== "safe_to_remove") {
     throw new Error(
       `Live verdict for ${payload.flag_key} is ${live.verdict}, not safe_to_remove; aborting edit`,
@@ -815,14 +831,273 @@ async function reverifyFlagSafety(payload: Payload): Promise<void> {
   console.log(
     `Re-verify ok: ${payload.flag_key} verdict=${live.verdict} collapse=${live.collapse_direction}`,
   );
+  return {
+    flag_key: live.flag_key || payload.flag_key,
+    verdict: live.verdict,
+    route: live.route ?? payload.route,
+    reason: live.reason ?? payload.reason,
+    collapse_direction: live.collapse_direction,
+    target_value: live.target_value ?? payload.target_value,
+    evaluated_events: live.evaluated_events,
+    blocked_events: live.blocked_events,
+    datafile_revision: live.datafile_revision ?? payload.datafile_revision,
+  };
 }
 
-async function applyFlagLocally(payload: Payload): Promise<void> {
+type McpClient = {
+  callTool: (args: {
+    name: string;
+    arguments: Record<string, unknown>;
+  }) => Promise<unknown>;
+  close: () => Promise<void>;
+};
+
+async function connectTinybirdMcp(): Promise<McpClient> {
+  const token = process.env.TINYBIRD_MCP_TOKEN ?? "";
+  if (!token) {
+    throw new Error("TINYBIRD_MCP_TOKEN is not set");
+  }
+  const host =
+    process.env.TINYBIRD_API_HOST ?? "https://api.us-east.aws.tinybird.co";
+  const { Client } = await import(
+    "@modelcontextprotocol/sdk/client/index.js"
+  );
+  const { StreamableHTTPClientTransport } = await import(
+    "@modelcontextprotocol/sdk/client/streamableHttp.js"
+  );
+  const url = new URL("https://mcp.tinybird.co");
+  url.searchParams.set("token", token);
+  url.searchParams.set("host", host);
+  const transport = new StreamableHTTPClientTransport(url);
+  const client = new Client({
+    name: "stale-flags-surgeon-evidence",
+    version: "0.1.0",
+  });
+  await client.connect(transport);
+  return client;
+}
+
+function evidenceToolConfig(): ToolConfiguration {
+  return {
+    tools: [
+      {
+        toolSpec: {
+          name: "tinybird_call_endpoint",
+          description:
+            "Call a Tinybird published endpoint for read-only evidence. Only flag_safety_check and cleanup_report are allowed.",
+          inputSchema: {
+            json: {
+              type: "object",
+              properties: {
+                endpoint_name: {
+                  type: "string",
+                  enum: [...MCP_ALLOWED_ENDPOINTS],
+                  description: "Allowed Tinybird endpoint name",
+                },
+                params: {
+                  type: "object",
+                  description:
+                    "Endpoint query params (e.g. key for flag_safety_check)",
+                  additionalProperties: true,
+                },
+              },
+              required: ["endpoint_name"],
+            },
+          },
+        },
+      },
+    ],
+  };
+}
+
+async function executeMcpEndpointCall(
+  mcp: McpClient,
+  endpointName: string,
+  params: Record<string, unknown>,
+): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+  if (
+    !(MCP_ALLOWED_ENDPOINTS as readonly string[]).includes(endpointName)
+  ) {
+    console.warn(
+      `tinybird_mcp allowlist_reject endpoint=${endpointName}`,
+    );
+    return {
+      ok: false,
+      error: `endpoint_name "${endpointName}" is not allowlisted; allowed: ${MCP_ALLOWED_ENDPOINTS.join(", ")}`,
+    };
+  }
+  try {
+    const result = await mcp.callTool({
+      name: "call_endpoint",
+      arguments: {
+        endpoint_name: endpointName,
+        params,
+        response_format: "JSON",
+      },
+    });
+    const text = extractMcpText(result);
+    console.log(
+      `tinybird_mcp tool=call_endpoint endpoint=${endpointName} status=ok`,
+    );
+    return { ok: true, text };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(
+      `tinybird_mcp tool=call_endpoint endpoint=${endpointName} status=error`,
+    );
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * After gates pass: separate Converse call with Tinybird MCP tools for PR
+ * evidence narrative only. Decision section stays harness-owned.
+ */
+async function generateEvidenceNarrative(
+  decisions: SafetyCheckRow[],
+): Promise<{
+  narrative: string;
+  status: "ok" | "unavailable";
+  toolCalls: number;
+}> {
+  const unavailable = (): {
+    narrative: string;
+    status: "ok" | "unavailable";
+    toolCalls: number;
+  } => ({
+    narrative: "Evidence narrative unavailable for this run.",
+    status: "unavailable",
+    toolCalls: 0,
+  });
+
+  if (!process.env.TINYBIRD_MCP_TOKEN) {
+    console.warn("TINYBIRD_MCP_TOKEN missing; evidence narrative unavailable");
+    return unavailable();
+  }
+  if (process.env.BEDROCK_DISABLED === "1") {
+    console.warn("BEDROCK_DISABLED=1; evidence narrative unavailable");
+    return unavailable();
+  }
+
+  let mcp: McpClient | null = null;
+  let toolCalls = 0;
+  try {
+    const region =
+      process.env.AWS_REGION ?? process.env.AWS_REGION_NAME ?? "us-east-1";
+    const client = new BedrockRuntimeClient({ region });
+    mcp = await connectTinybirdMcp();
+
+    const flagList = decisions.map((d) => d.flag_key).join(", ");
+    const system = `You write a short evidence narrative for a flag-cleanup pull request.
+The safety decision is already made by deterministic harness code and cannot be changed by you.
+Use the tinybird_call_endpoint tool to fetch evidence per flag (flag_safety_check with params.key, and/or cleanup_report).
+Write plain sentences only. No speculation. Do not invent numbers. Do not recommend keeping or removing flags.
+Do not output JSON, verdicts, collapse directions, or decision language. Evidence narrative only.`;
+
+    const userText = `Write an evidence narrative for these flags already approved for removal: ${flagList}.
+Call Tinybird for each flag's live evidence, then summarize what the endpoints returned in plain sentences.`;
+
+    const messages: Message[] = [
+      { role: "user", content: [{ text: userText }] },
+    ];
+
+    const deadline = Date.now() + MCP_EVIDENCE_TIMEOUT_MS;
+    let finalText = "";
+
+    while (Date.now() < deadline) {
+      const res = await client.send(
+        new ConverseCommand({
+          modelId: bedrockModelId(),
+          system: [{ text: system }],
+          messages,
+          inferenceConfig: { maxTokens: 2048, temperature: 0 },
+          toolConfig: evidenceToolConfig(),
+        }),
+      );
+
+      const assistantMsg = res.output?.message;
+      if (!assistantMsg?.content) {
+        throw new Error("Empty Converse response for evidence narrative");
+      }
+      messages.push({
+        role: "assistant",
+        content: assistantMsg.content,
+      });
+
+      if (res.stopReason !== "tool_use") {
+        finalText = (assistantMsg.content ?? [])
+          .map((c) => ("text" in c && c.text ? c.text : ""))
+          .join("\n")
+          .trim();
+        break;
+      }
+
+      const toolUses = (assistantMsg.content ?? []).filter(
+        (c): c is ContentBlock.ToolUseMember =>
+          "toolUse" in c && Boolean(c.toolUse),
+      );
+      if (toolUses.length === 0) {
+        throw new Error("stopReason=tool_use but no toolUse blocks");
+      }
+
+      const toolResultBlocks: ContentBlock[] = [];
+      for (const block of toolUses) {
+        toolCalls += 1;
+        if (toolCalls > MAX_MCP_TOOL_CALLS) {
+          console.warn(
+            `MCP evidence tool call cap (${MAX_MCP_TOOL_CALLS}) exceeded`,
+          );
+          throw new Error("MCP evidence tool call cap exceeded");
+        }
+        const tu = block.toolUse!;
+        const input = (tu.input ?? {}) as {
+          endpoint_name?: string;
+          params?: Record<string, unknown>;
+        };
+        const endpointName = String(input.endpoint_name ?? "");
+        const params = input.params ?? {};
+        const executed = await executeMcpEndpointCall(
+          mcp,
+          endpointName,
+          params,
+        );
+        toolResultBlocks.push({
+          toolResult: {
+            toolUseId: tu.toolUseId!,
+            content: executed.ok
+              ? [{ text: executed.text }]
+              : [{ text: JSON.stringify({ error: executed.error }) }],
+            status: executed.ok ? "success" : "error",
+          },
+        });
+      }
+      messages.push({ role: "user", content: toolResultBlocks });
+    }
+
+    if (!finalText) {
+      throw new Error("Evidence narrative timed out or returned empty text");
+    }
+
+    console.log(`mcp_evidence=ok tool_calls=${toolCalls}`);
+    return { narrative: finalText, status: "ok", toolCalls };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`Evidence narrative failed: ${msg}`);
+    console.log(`mcp_evidence=unavailable tool_calls=${toolCalls}`);
+    return { ...unavailable(), toolCalls };
+  } finally {
+    await mcp?.close().catch(() => undefined);
+  }
+}
+
+async function applyFlagLocally(
+  payload: Payload,
+): Promise<{ decision: SafetyCheckRow }> {
   assertFlagKey(payload.flag_key);
   if (payload.collapse_direction === "none") {
     throw new Error(`Refusing collapse_direction=none for ${payload.flag_key}`);
   }
-  await reverifyFlagSafety(payload);
+  const decision = await reverifyFlagSafety(payload);
   deleteYaml(payload.flag_key);
   const files = findReferenceFiles(payload.flag_key);
   if (files.length === 0) {
@@ -834,34 +1109,7 @@ async function applyFlagLocally(payload: Payload): Promise<void> {
       `gates failed for ${payload.flag_key}: ${gateLog.slice(0, 4000)}`,
     );
   }
-}
-
-function multiFlagBody(plan: PlanFile, payloads: Payload[]): string {
-  const lines = payloads.map(
-    (p) =>
-      `- \`${p.flag_key}\`: ${p.collapse_direction} (target=${p.target_value}) — ${p.reason}`,
-  );
-  return `## Flag cleanup batch
-
-**Run:** ${plan.run_id}
-**Branch:** \`${plan.branch_name}\`
-
-Removed ${payloads.length} independently \`safe_to_remove\` flag(s) in one all-or-nothing PR.
-
-${lines.join("\n")}
-
-### Evidence (per flag)
-${payloads
-  .map(
-    (p) => `#### ${p.flag_key}
-\`\`\`json
-${JSON.stringify(p.evidence, null, 2)}
-\`\`\``,
-  )
-  .join("\n\n")}
-
-Gates: tsc, vite build, featurevisor lint/test, flag-key grep, security diff allowlist.
-`;
+  return { decision };
 }
 
 async function runPlanMode(plan: PlanFile): Promise<void> {
@@ -910,11 +1158,13 @@ async function runPlanMode(plan: PlanFile): Promise<void> {
   };
 
   try {
+    const decisions: SafetyCheckRow[] = [];
     for (const payload of payloads) {
       console.log(
         `\n=== Applying ${payload.flag_key} (${payload.collapse_direction}) ===`,
       );
-      await applyFlagLocally(payload);
+      const { decision } = await applyFlagLocally(payload);
+      decisions.push(decision);
     }
 
     const dirty = listDirtyPaths().filter(
@@ -955,7 +1205,18 @@ async function runPlanMode(plan: PlanFile): Promise<void> {
       }
     }
 
-    const body = multiFlagBody(plan, payloads);
+    const evidence = await generateEvidenceNarrative(decisions);
+    const body = buildPrBody({
+      runIdValue: plan.run_id,
+      titleLine: `## Flag cleanup batch
+
+**Branch:** \`${plan.branch_name}\`
+
+Removed ${payloads.length} independently \`safe_to_remove\` flag(s) in one all-or-nothing PR.`,
+      decisions,
+      evidenceNarrative: evidence.narrative,
+      mcpStatus: evidence.status,
+    });
     mkdirSync(path.join(root, ".local-data"), { recursive: true });
     writeFileSync(path.join(root, `.local-data/pr-${plan.run_id}.md`), body);
 
@@ -1028,14 +1289,22 @@ async function runSingleFlagMode(): Promise<void> {
   );
 
   if (dryRun) {
-    await reverifyFlagSafety(payload);
+    const decision = await reverifyFlagSafety(payload);
     const files = findReferenceFiles(payload.flag_key);
     console.log("Would remove YAML + edit:");
     console.log(`  featurevisor/features/${payload.flag_key}.yml`);
     console.log(`  featurevisor/tests/features/${payload.flag_key}.spec.yml`);
     for (const f of files) console.log(`  ${path.relative(root, f)}`);
-    console.log("\n--- PR body preview ---\n");
-    console.log(fallbackBody(payload));
+    console.log("\n--- PR body preview (decision only; MCP evidence skipped in dry-run) ---\n");
+    console.log(
+      buildPrBody({
+        runIdValue: payload.run_id,
+        titleLine: `## Flag cleanup: \`${payload.flag_key}\``,
+        decisions: [decision],
+        evidenceNarrative: "",
+        mcpStatus: "unavailable",
+      }),
+    );
     return;
   }
 
@@ -1059,8 +1328,15 @@ async function runSingleFlagMode(): Promise<void> {
   };
 
   try {
-    await applyFlagLocally(payload);
-    const body = fallbackBody(payload);
+    const { decision } = await applyFlagLocally(payload);
+    const evidence = await generateEvidenceNarrative([decision]);
+    const body = buildPrBody({
+      runIdValue: payload.run_id,
+      titleLine: `## Flag cleanup: \`${payload.flag_key}\``,
+      decisions: [decision],
+      evidenceNarrative: evidence.narrative,
+      mcpStatus: evidence.status,
+    });
     mkdirSync(path.join(root, ".local-data"), { recursive: true });
     writeFileSync(
       path.join(root, `.local-data/pr-${payload.flag_key}.md`),

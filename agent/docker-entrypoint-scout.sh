@@ -9,7 +9,7 @@ set -euo pipefail
 export GH_TOKEN="$GITHUB_TOKEN"
 export AWS_REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}"
 export AWS_REGION_NAME="${AWS_REGION_NAME:-$AWS_REGION}"
-export SCOUT_SOURCE="${SCOUT_SOURCE:-mcp}"
+export SCOUT_SOURCE="${SCOUT_SOURCE:-tinybird}"
 export AGENT_ORCHESTRATOR="${AGENT_ORCHESTRATOR:-stepfunctions}"
 export RESULT_S3_URI
 

@@ -109,8 +109,8 @@ export class AgentOrchestrator extends Construct {
       environment: {
         AWS_REGION: region,
         AWS_REGION_NAME: region,
-        // MCP-first: demo sells Tinybird's hosted MCP as the governed query surface.
-        SCOUT_SOURCE: "mcp",
+        // Deterministic scout: Tinybird REST only (models/people use MCP).
+        SCOUT_SOURCE: "tinybird",
         AGENT_ORCHESTRATOR: "stepfunctions",
         GITHUB_REPO: githubRepo,
       },
@@ -176,6 +176,11 @@ export class AgentOrchestrator extends Construct {
           "TINYBIRD_APPEND_TOKEN",
         ),
         TINYBIRD_TOKEN: ecs.Secret.fromSecretsManager(agentSecrets, "TINYBIRD_TOKEN"),
+        // Read-only MCP token for evidence narrative (not reused for REST re-verify).
+        TINYBIRD_MCP_TOKEN: ecs.Secret.fromSecretsManager(
+          agentSecrets,
+          "TINYBIRD_MCP_TOKEN",
+        ),
       },
     });
 

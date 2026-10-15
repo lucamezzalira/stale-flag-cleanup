@@ -46,12 +46,13 @@ flowchart TB
   end
 
   subgraph agent [Background agent]
-    SCOUT[scout Tinybird MCP/REST]
-    SURG[surgeon Bedrock Converse]
+    SCOUT[scout Tinybird REST]
+    SURG[surgeon Bedrock + REST re-verify]
     GH[GitHub PR into demo]
     LOG[cleanup_decision_log]
     CAND --> SCOUT
     SAFE --> SCOUT
+    SAFE -->|REST re-verify| SURG
     SCOUT -->|verdict + reason| LOG
     SCOUT -->|safe_to_remove only| SURG
     SURG -->|collapse YAML + app code| GH
@@ -65,9 +66,23 @@ flowchart TB
     RPT --> CLI
     RPT --> MCP
     SAFE --> MCP
+    SURG -->|evidence narrative| MCP
     GH --> QA
   end
 ```
+
+### Protocol rule
+
+> Code talks to Tinybird over REST. Models and people talk to Tinybird over MCP.
+> Every safety decision is taken by code, never by a model.
+
+| Caller | Protocol | Can it decide safety? |
+|---|---|---|
+| Scout (deterministic) | REST | No (reads pipe verdicts; plans only) |
+| Surgeon harness (`reverifyFlagSafety`) | REST | Yes (abort on drift; Decision section) |
+| Surgeon editing model (`editLoop`) | none (no Tinybird tools) | No |
+| Surgeon evidence model (post-gates Converse) | MCP (`TINYBIRD_MCP_TOKEN`) | No (narrative only) |
+| Humans / editors | MCP | No (inspection) |
 
 ## Architecture (AWS us-east-1)
 
@@ -168,21 +183,20 @@ sequenceDiagram
 1. **Featurevisor** holds flag definitions; datafiles ship to S3/CloudFront.
 2. **`apps/web` + `flag-client`** evaluate from that datafile.
 3. **`publish-defs` / seed** populate Tinybird definitions + activity.
-4. **Tinybird** pipes are the only eligibility API. Scout and surgeon re-verify call them
-   through **Tinybird MCP** on the Fargate path (`SCOUT_SOURCE=mcp`); REST is the fallback.
+4. **Tinybird** pipes are the only eligibility API. Scout and surgeon harness call them over **REST**. The surgeon evidence model (and humans) use **Tinybird MCP**.
 5. **Scout** plans independently `safe_to_remove` flags (`collapse_direction != none`) into S3 `plan.json`. It does not invent nest deletes for parent-gated inconclusive children.
-6. **Surgeon** applies the whole plan in one Fargate session, then opens **one** PR only if every flag passes gates.
+6. **Surgeon** re-verifies each flag over REST, applies the whole plan in one Fargate session, then opens **one** PR only if every flag passes gates. Evidence narrative is a separate MCP-backed Converse call after gates.
 7. **Humans** merge. Publish syncs CDN. QA: `docs/qa-agent.md`.
 
 ### What changed vs the first PoC sketch
 
 | Area | Before | Now |
 |---|---|---|
-| Scout evidence | Local store | Tinybird REST pipes |
-| Surgeon | Per-flag Map / CodeBuild | One Fargate session, one multi-flag PR |
-| Agent host | CodeBuild | EventBridge → SFN → split Fargate images |
+| Scout evidence | Local store / MCP-first | Tinybird REST only (`source=tinybird-rest`) |
+| Surgeon | Per-flag Map | One Fargate session, one multi-flag PR; REST re-verify; MCP evidence narrative |
+| Agent host | Early experiments | EventBridge → SFN → split ECS Fargate images |
 | Merge notify | SNS stub | GitHub PR notifications |
-| Model | n/a | Sonnet 4.5 Converse |
+| Model | n/a | Sonnet 4.5 Converse (edit without tools; evidence with MCP tools) |
 | QA | Ad hoc | Production-bar playbook + new-flag E2E |
 
 Refusals stay. Safe removals are whatever Tinybird marks safe (E2E fixtures: `loyalty_stamp_banner`, `express_pay_hint`).
@@ -225,10 +239,10 @@ pnpm datafile:serve   # terminal 1
 pnpm seed             # terminal 2 — 90-day synthetic history
 pnpm publish-defs
 pnpm report
-SCOUT_SOURCE=mcp pnpm agent:scout -- --dry-run
+SCOUT_SOURCE=tinybird pnpm agent:scout -- --dry-run
 ```
 
-You should see `loyalty_stamp_banner` and `express_pay_hint` as `safe_to_remove` (and any other independently safe leaves), plus refusals for wishlist / shipping / search / checkout_redesign.
+You should see `loyalty_stamp_banner` and `express_pay_hint` as `safe_to_remove` (and any other independently safe leaves), plus refusals for wishlist / shipping / search / checkout_redesign. Scout logs `source=tinybird-rest`.
 
 ```bash
 export VITE_DATAFILE_URL=http://127.0.0.1:4099/production/featurevisor-all.json
@@ -250,9 +264,10 @@ Set GitHub secret `AWS_GHA_PUBLISH_ROLE_ARN` to stack output `GitHubPublishRoleA
 
 ## MCP (Tinybird)
 
-Scope a token to the three endpoints and add Tinybird MCP in the editor. That is the same
-hosted MCP the Fargate scout uses (`call_endpoint`) and the surgeon uses to re-verify
-`flag_safety_check` before each edit.
+People and the surgeon **evidence** model use Tinybird MCP (`https://mcp.tinybird.co`).
+Create a resource-scoped static token with READ on `flag_safety_check` and `cleanup_report`
+only; put it in `TINYBIRD_MCP_TOKEN` (wired into `stale-flags/agent` for the surgeon task).
+Scout and harness re-verify use `TINYBIRD_TOKEN` over REST, not MCP.
 
 ## Environment variables
 
@@ -261,8 +276,10 @@ See `.env.example`. Important ones:
 | Var | Purpose |
 |---|---|
 | `VITE_DATAFILE_URL` | Remote Featurevisor datafile URL |
-| `TINYBIRD_*` | Cloud ingest / pipe API / MCP |
-| `SCOUT_SOURCE` | `tinybird` / `mcp` for cloud scout |
+| `TINYBIRD_TOKEN` | REST for scout + surgeon harness |
+| `TINYBIRD_MCP_TOKEN` | Surgeon evidence MCP (READ on two pipes) |
+| `TINYBIRD_APPEND_TOKEN` | Event / decision log ingest |
+| `SCOUT_SOURCE` | `tinybird` for cloud scout (REST); omit/local for `.local-data` |
 | `BEDROCK_MODEL_ID` | Default Sonnet 4.5 inference profile |
 | `BEDROCK_DISABLED` | `1` forces heuristic surgeon edits |
 | `GITHUB_TOKEN` / `DEMO_BRANCH` | PRs against `demo` |
@@ -271,7 +288,7 @@ See `.env.example`. Important ones:
 ## Agent commands
 
 ```bash
-SCOUT_SOURCE=mcp pnpm agent:scout -- --dry-run
+SCOUT_SOURCE=tinybird pnpm agent:scout -- --dry-run
 pnpm agent:run
 pnpm agent:surgeon -- --flag=promo_banner_2025 --dry-run
 pnpm demo:reset

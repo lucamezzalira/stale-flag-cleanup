@@ -70,6 +70,22 @@ gh pr diff <N> --name-only
 
 Publish (GHA or `pnpm infra:sync`). Record invalidation IDs. Hard-refresh shop + fetch datafile JSON. Confirm keys absent and UI collapses. Wishlist still refused.
 
+## Expected observability logs (PRD-07)
+
+Scout (CloudWatch `/scout`):
+
+- `source=tinybird-rest` on the run banner (never `tinybird-mcp`)
+- `tinybird_rest endpoint=<name> status=<code> rows=<n>`
+
+Surgeon (CloudWatch `/surgeon`):
+
+- `tinybird_rest endpoint=flag_safety_check flag=<key> verdict=<v>` before each edit
+- `tinybird_mcp tool=call_endpoint endpoint=<name> status=ok|error` during evidence narrative
+- `mcp_evidence=ok|unavailable tool_calls=<n>` before PR create
+- Allowlist rejects: `tinybird_mcp allowlist_reject endpoint=<name>`
+
+PR body must contain **Decision (harness)** from REST re-verify, plus **Evidence, retrieved via Tinybird MCP** (or the unavailable fallback line).
+
 ## Failure modes
 
 | Symptom | Check |
@@ -78,3 +94,5 @@ Publish (GHA or `pnpm infra:sync`). Record invalidation IDs. Hard-refresh shop +
 | REVISION-only PR | Already-removed flags; restore YAML/UI first |
 | SurgeonFailed mid-plan | No remote push (all-or-nothing); ECS surgeon logs |
 | CDN false green | Assert datafile JSON keys, not UI alone |
+| Scout MCP logs | Bug: scout must be REST-only after PRD-07 |
+| Decision section missing / model-owned | Bug: harness must own Decision from REST |

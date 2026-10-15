@@ -47,76 +47,11 @@ function useTinybird(): boolean {
   return Boolean(
     process.env.TINYBIRD_TOKEN &&
       (process.env.SCOUT_SOURCE === "tinybird" ||
-        process.env.SCOUT_SOURCE === "mcp" ||
-        process.env.AWS_EXECUTION_ENV ||
-        process.env.CODEBUILD_BUILD_ID),
+        process.env.AWS_EXECUTION_ENV),
   );
 }
 
-function preferMcp(): boolean {
-  // Demo path: Tinybird MCP is the governed surface the article sells.
-  // REST remains a fallback when MCP is unreachable.
-  return (
-    process.env.SCOUT_SOURCE === "mcp" ||
-    process.env.SCOUT_MCP === "1" ||
-    process.env.SCOUT_MCP === "prefer"
-  );
-}
-
-async function callTinybirdViaMcp<T>(
-  endpointName: string,
-  params: Record<string, string | number>,
-  host: string,
-  token: string,
-): Promise<T[]> {
-  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-  const { StreamableHTTPClientTransport } = await import(
-    "@modelcontextprotocol/sdk/client/streamableHttp.js"
-  );
-  const url = new URL("https://mcp.tinybird.co");
-  url.searchParams.set("token", token);
-  url.searchParams.set("host", host);
-  const transport = new StreamableHTTPClientTransport(url);
-  const client = new Client({ name: "stale-flags-scout", version: "0.1.0" });
-  await client.connect(transport);
-  try {
-    const result = await client.callTool({
-      name: "call_endpoint",
-      arguments: {
-        endpoint_name: endpointName,
-        params,
-        response_format: "JSON",
-      },
-    });
-    const text = extractMcpText(result);
-    const parsed = JSON.parse(text) as { data?: T[] } | T[];
-    if (Array.isArray(parsed)) return parsed;
-    return parsed.data ?? [];
-  } finally {
-    await client.close().catch(() => undefined);
-  }
-}
-
-async function callTinybirdViaRest<T>(
-  endpointName: string,
-  params: Record<string, string | number>,
-  host: string,
-  token: string,
-): Promise<T[]> {
-  const qs = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
-  const res = await fetch(
-    `${host.replace(/\/$/, "")}/v0/pipes/${endpointName}.json?${qs}`,
-    { headers: { Authorization: `Bearer ${token}` } },
-  );
-  const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`Tinybird pipe ${endpointName}: ${res.status} ${text}`);
-  }
-  const json = JSON.parse(text) as { data: T[] };
-  return json.data ?? [];
-}
-
+/** Deterministic code talks to Tinybird over REST only. Non-2xx is a hard failure. */
 async function callTinybirdEndpoint<T>(
   endpointName: string,
   params: Record<string, string | number> = {},
@@ -126,60 +61,25 @@ async function callTinybirdEndpoint<T>(
   const token = process.env.TINYBIRD_TOKEN ?? "";
   if (!token) throw new Error("TINYBIRD_TOKEN is required for Tinybird mode");
 
-  if (preferMcp()) {
-    try {
-      console.log(`Tinybird MCP call_endpoint ${endpointName}`);
-      return await callTinybirdViaMcp<T>(endpointName, params, host, token);
-    } catch (mcpErr) {
-      console.warn(
-        `Tinybird MCP failed (${mcpErr instanceof Error ? mcpErr.message : mcpErr}); falling back to REST`,
-      );
-      return callTinybirdViaRest<T>(endpointName, params, host, token);
-    }
-  }
-
-  try {
-    return await callTinybirdViaRest<T>(endpointName, params, host, token);
-  } catch (restErr) {
-    console.warn(
-      `Tinybird REST failed (${restErr instanceof Error ? restErr.message : restErr}); trying MCP`,
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
+  const res = await fetch(
+    `${host.replace(/\/$/, "")}/v0/pipes/${endpointName}.json?${qs}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  const text = await res.text();
+  if (!res.ok) {
+    console.log(
+      `tinybird_rest endpoint=${endpointName} status=${res.status} rows=0`,
     );
-    return callTinybirdViaMcp<T>(endpointName, params, host, token);
+    throw new Error(`Tinybird pipe ${endpointName}: ${res.status} ${text}`);
   }
-}
-
-function extractMcpText(result: unknown): string {
-  const r = result as {
-    content?: Array<{ type?: string; text?: string }>;
-    structuredContent?: unknown;
-  };
-  if (typeof r.structuredContent === "object" && r.structuredContent) {
-    return JSON.stringify(r.structuredContent);
-  }
-  const text = (r.content ?? [])
-    .filter((c) => c.type === "text" && c.text)
-    .map((c) => c.text!)
-    .join("\n");
-  if (!text) throw new Error("Empty MCP call_endpoint response");
-  // MCP sometimes wraps or appends prose; pull the first JSON object/array.
-  const start = text.search(/[\{\[]/);
-  if (start === -1) return text;
-  const slice = text.slice(start);
-  try {
-    JSON.parse(slice);
-    return slice;
-  } catch {
-    // Walk braces to find a parseable prefix
-    for (let end = slice.length; end > 1; end--) {
-      try {
-        JSON.parse(slice.slice(0, end));
-        return slice.slice(0, end);
-      } catch {
-        /* continue */
-      }
-    }
-  }
-  return text;
+  const json = JSON.parse(text) as { data: T[] };
+  const rows = json.data ?? [];
+  console.log(
+    `tinybird_rest endpoint=${endpointName} status=${res.status} rows=${rows.length}`,
+  );
+  return rows;
 }
 
 function shouldSkip(
@@ -295,7 +195,7 @@ async function main(): Promise<void> {
   const tinybird = useTinybird() || argv.includes("--tinybird");
   const id = runId();
   console.log(
-    `Scout run_id=${id} dryRun=${dryRun || !full} source=${tinybird ? (preferMcp() ? "tinybird-mcp" : "tinybird-rest") : "local"} dispatch=${!noDispatch}\n`,
+    `Scout run_id=${id} dryRun=${dryRun || !full} source=${tinybird ? "tinybird-rest" : "local"} dispatch=${!noDispatch}\n`,
   );
 
   const localMeta = tinybird ? null : await loadFromLocal();

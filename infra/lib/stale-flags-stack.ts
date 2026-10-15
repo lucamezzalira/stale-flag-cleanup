@@ -30,6 +30,7 @@ export class StaleFlagsStack extends cdk.Stack {
           TINYBIRD_API_HOST: "https://api.us-east.aws.tinybird.co",
           TINYBIRD_APPEND_TOKEN: "REPLACE_ME",
           TINYBIRD_TOKEN: "REPLACE_ME",
+          TINYBIRD_MCP_TOKEN: "REPLACE_ME",
         }),
         generateStringKey: "_cdk_placeholder",
       },
@@ -132,7 +133,7 @@ export class StaleFlagsStack extends cdk.Stack {
       distributionPaths: ["/*"],
     });
 
-    // --- Agent: Step Functions + ECS Fargate (replaces CodeBuild entrypoint) ---
+    // --- Agent: Step Functions + ECS Fargate ---
     const agent = new AgentOrchestrator(this, "Agent", {
       agentSecrets,
       githubRepo,

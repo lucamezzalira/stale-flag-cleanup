@@ -183,8 +183,8 @@ dataset. It records what the evidence said at the moment a decision was taken.
 /tools/generator        Synthetic data generator and seeding
 /tools/report           Local CLI report for humans without an MCP client
 /tools/reset            Demo reset script
-/agent/scout            Deterministic planner; Tinybird MCP-first (`SCOUT_SOURCE=mcp`); writes S3 plan.json
-/agent/surgeon          Bedrock-backed editor; one session per plan; one multi-flag PR
+/agent/scout            Deterministic planner; Tinybird REST only (`SCOUT_SOURCE=tinybird`); writes S3 plan.json
+/agent/surgeon          Bedrock editor + REST re-verify + MCP evidence narrative; one session per plan; one multi-flag PR
 /infra                  CDK: EventBridge Scheduler, Step Functions, ECS Fargate (scout + surgeon images), Secrets Manager, S3/CloudFront
 /docs                   These PRDs plus qa-agent playbook
 README.md               Quickstart: clone, seed, run, see a refusal

@@ -8,10 +8,12 @@ Aligns with Tinybird `api.us-east.aws.tinybird.co`. Diagrams live in the root [`
 |---|---|
 | S3 + CloudFront (web) | Northline demo shop SPA |
 | S3 + CloudFront (datafiles, 60s TTL, OAC) | Remote Featurevisor `datafileUrl` |
-| Secrets Manager `stale-flags/agent` | GitHub + Tinybird tokens (`pnpm infra:secrets` only) |
+| Secrets Manager `stale-flags/agent` | GitHub + Tinybird REST/MCP tokens (`pnpm infra:secrets` only) |
 | Step Functions `stale-flags-cleanup` | Scout → Choice → one Surgeon session → Succeeded |
-| ECS Fargate scout (ARM64, smaller) | Tinybird REST plan → S3 `plan.json` (no Bedrock) |
-| ECS Fargate surgeon (ARM64) | All-or-nothing multi-flag edit + one PR |
+| ECS Fargate scout (ARM64, smaller) | Tinybird REST plan → S3 `plan.json` (no Bedrock, no MCP) |
+| ECS Fargate surgeon (ARM64) | REST re-verify + Bedrock edit + MCP evidence narrative + one PR |
+
+Agent host is **ECS Fargate under Step Functions** (EventBridge Scheduler nightly). CodeBuild is not the agent host.
 | S3 results bucket | Plan / surgeon result handoff |
 | EventBridge Scheduler `stale-flags-sfn-nightly-utc` | Midnight UTC StartExecution |
 | IAM role `stale-flags-gha-publish` | GitHub Actions OIDC for publish-flags |

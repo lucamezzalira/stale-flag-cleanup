@@ -17,9 +17,9 @@ the article tells.
 
 Deterministic code, not an LLM. It:
 
-1. Calls Tinybird via **hosted MCP** (`call_endpoint` on `flag_candidates` +
-   `cleanup_report`). Fargate sets `SCOUT_SOURCE=mcp`. REST is the fallback if MCP
-   is unreachable.
+1. Calls Tinybird over **REST** (`GET /v0/pipes/{endpoint}.json`) for
+   `flag_candidates` + `cleanup_report`. Fargate sets `SCOUT_SOURCE=tinybird`.
+   Non-2xx is a hard failure. Scout never uses MCP (see PRD-07).
 2. Drops any candidate that already has `last_pr_url` from a previous run, so the agent
    does not reopen the same pull request every night until the first one is merged.
 3. Plans only independently `safe_to_remove` rows with `collapse_direction != none`. It
@@ -37,17 +37,20 @@ An LLM-backed editor (Bedrock Converse Sonnet 4.5, with heuristic fallback), **o
 task for the whole plan**. It:
 
 1. Loads the plan from `PLAN_S3_URI` / `--plan-s3`.
-2. Before editing each flag, re-verifies live via **Tinybird MCP**
-   `flag_safety_check?key=` (REST fallback; never `flag_key`). Aborts the whole plan
-   (rewind, no PR) if live `verdict` / `collapse_direction` (and non-empty `target_value`)
-   no longer match the plan payload, or if the request fails / returns empty. Dry-run
-   still re-verifies.
+2. Before editing each flag, re-verifies live over **Tinybird REST**
+   `flag_safety_check?key=` (never `flag_key`). Aborts the whole plan (rewind, no PR) if
+   live `verdict` / `collapse_direction` (and non-empty `target_value`) no longer match
+   the plan payload, or if the request fails / returns empty. Dry-run still re-verifies.
+   REST re-verify owns the PR **Decision** section.
 3. For each planned flag, collapses Featurevisor YAML + app call sites using the pipe's
    `collapse_direction` / `target_value`. Never infers collapse from the code alone.
+   Editing Converse has **no** Tinybird tools.
 4. Runs validation gates per flag. All-or-nothing: if any flag fails, rewind local edits,
    write failure, and **do not** push or open a PR.
-5. If every flag passes, push one branch and open **one** multi-flag pull request into
-   `demo`. Never merges.
+5. After all gates pass, a separate Converse call with Tinybird MCP
+   (`TINYBIRD_MCP_TOKEN`, READ on `flag_safety_check` + `cleanup_report`) writes the
+   **Evidence** narrative only. MCP failure still opens the PR with an unavailable line.
+6. Push one branch and open **one** multi-flag pull request into `demo`. Never merges.
 
 Single-flag `--flag=` mode remains for local dry runs.
 

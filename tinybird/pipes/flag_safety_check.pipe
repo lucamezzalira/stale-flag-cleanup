@@ -1,4 +1,5 @@
 TOKEN endpoint_read READ
+TOKEN surgeon_mcp_evidence READ
 DESCRIPTION Ordered safety verdict for a single flag. Param `key` is the flag key (not `flag_key`, which collides with the column).
 
 NODE latest_def
