@@ -1,4 +1,5 @@
-description: Product listing size-guide panel (delete_gated E2E fixture; 100% for live UI before kill)
+description: Product listing size-guide panel (delete_gated E2E fixture)
+deprecated: true
 tags:
   - all
 bucketBy: userId
@@ -6,8 +7,8 @@ rules:
   staging:
     - key: everyone
       segments: "*"
-      percentage: 100
+      percentage: 0
   production:
     - key: everyone
       segments: "*"
-      percentage: 100
+      percentage: 0
