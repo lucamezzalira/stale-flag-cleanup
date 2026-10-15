@@ -45,18 +45,24 @@ function parsePayload(): Payload {
   if (flagArg) {
     const key = flagArg.slice("--flag=".length);
     if (!FLAG_KEY_RE.test(key)) throw new Error(`Invalid flag_key: ${key}`);
+    const collapseArg = argv.find((a) => a.startsWith("--collapse="));
+    const targetArg = argv.find((a) => a.startsWith("--target="));
+    const collapse = (collapseArg?.slice("--collapse=".length) ??
+      "keep_gated_branch") as Payload["collapse_direction"];
+    const target_value =
+      targetArg?.slice("--target=".length) ??
+      (collapse === "delete_gated_branch" ? "false" : "true");
     return {
       flag_key: key,
       verdict: "safe_to_remove",
       reason: "manual",
-      target_value: key === "promo_banner_2025" ? "false" : "true",
-      collapse_direction:
-        key === "promo_banner_2025" ? "delete_gated_branch" : "keep_gated_branch",
+      target_value,
+      collapse_direction: collapse,
       evidence: {},
       run_id: "manual",
     };
   }
-  throw new Error("Provide --payload=… or --flag=");
+  throw new Error("Provide --payload=…, --plan-s3=…, or --flag= with --collapse=");
 }
 
 function assertFlagKey(flagKey: string): void {
@@ -609,7 +615,247 @@ async function ensurePr(opts: {
   return (created.stdout || "").trim();
 }
 
-async function main(): Promise<void> {
+
+type PlanFile = {
+  run_id: string;
+  branch_name: string;
+  candidates: Array<{
+    flag_key: string;
+    payload_b64: string;
+    collapse_direction?: string;
+    reason?: string;
+  }>;
+};
+
+function loadPlan(): PlanFile | null {
+  const argv = process.argv.filter((a) => a !== "--");
+  const planArg = argv.find((a) => a.startsWith("--plan-s3="));
+  const uri = planArg?.slice("--plan-s3=".length) || process.env.PLAN_S3_URI;
+  if (!uri?.startsWith("s3://")) return null;
+  const got = spawnSync("aws", ["s3", "cp", uri, "-"], {
+    encoding: "utf8",
+    cwd: root,
+  });
+  if (got.status !== 0) {
+    throw new Error(`Failed to read plan ${uri}: ${got.stderr || got.stdout}`);
+  }
+  return JSON.parse(got.stdout) as PlanFile;
+}
+
+function writeSurgeonResult(body: unknown): void {
+  const dest = process.env.RESULT_S3_URI;
+  const json = `${JSON.stringify(body)}\n`;
+  if (dest?.startsWith("s3://")) {
+    const put = spawnSync("aws", ["s3", "cp", "-", dest], {
+      input: json,
+      encoding: "utf8",
+      cwd: root,
+    });
+    if (put.status !== 0) {
+      throw new Error(
+        `Failed to write surgeon result to ${dest}: ${put.stderr || put.stdout}`,
+      );
+    }
+    console.log(`Wrote surgeon result to ${dest}`);
+  }
+  console.log(`SURGEON_RESULT_JSON:${JSON.stringify(body)}`);
+}
+
+async function applyFlagLocally(payload: Payload): Promise<void> {
+  assertFlagKey(payload.flag_key);
+  if (payload.collapse_direction === "none") {
+    throw new Error(`Refusing collapse_direction=none for ${payload.flag_key}`);
+  }
+  deleteYaml(payload.flag_key);
+  const files = findReferenceFiles(payload.flag_key);
+  if (files.length === 0) {
+    console.log(`No app call sites for ${payload.flag_key}; YAML-only removal`);
+  }
+  const { ok, gateLog } = await editLoop(payload, files);
+  if (!ok) {
+    throw new Error(
+      `gates failed for ${payload.flag_key}: ${gateLog.slice(0, 4000)}`,
+    );
+  }
+}
+
+function multiFlagBody(plan: PlanFile, payloads: Payload[]): string {
+  const lines = payloads.map(
+    (p) =>
+      `- \`${p.flag_key}\`: ${p.collapse_direction} (target=${p.target_value}) — ${p.reason}`,
+  );
+  return `## Flag cleanup batch
+
+**Run:** ${plan.run_id}
+**Branch:** \`${plan.branch_name}\`
+
+Removed ${payloads.length} independently \`safe_to_remove\` flag(s) in one all-or-nothing PR.
+
+${lines.join("\n")}
+
+### Evidence (per flag)
+${payloads
+  .map(
+    (p) => `#### ${p.flag_key}
+\`\`\`json
+${JSON.stringify(p.evidence, null, 2)}
+\`\`\``,
+  )
+  .join("\n\n")}
+
+Gates: tsc, vite build, featurevisor lint/test, flag-key grep, security diff allowlist.
+`;
+}
+
+async function runPlanMode(plan: PlanFile): Promise<void> {
+  if (!plan.candidates?.length) {
+    writeSurgeonResult({
+      ok: true,
+      pr_url: "",
+      run_id: plan.run_id,
+      flags: [],
+      note: "empty plan",
+    });
+    return;
+  }
+
+  const demoBranch = process.env.DEMO_BRANCH ?? "demo";
+  const workBranch = plan.branch_name || `agent/cleanup-${plan.run_id}`;
+  const payloads: Payload[] = plan.candidates.map((c) => {
+    const p = JSON.parse(
+      Buffer.from(c.payload_b64, "base64url").toString("utf8"),
+    ) as Payload;
+    assertFlagKey(p.flag_key);
+    return p;
+  });
+
+  console.log(
+    `Surgeon plan mode run=${plan.run_id} branch=${workBranch} flags=${payloads.map((p) => p.flag_key).join(",")}`,
+  );
+
+  if (!run("git", ["fetch", "origin", demoBranch])) {
+    throw new Error(`git fetch origin ${demoBranch} failed`);
+  }
+  if (!run("git", ["checkout", demoBranch])) {
+    throw new Error(`git checkout ${demoBranch} failed`);
+  }
+  if (!run("git", ["reset", "--hard", `origin/${demoBranch}`])) {
+    throw new Error(`git reset --hard origin/${demoBranch} failed`);
+  }
+  if (!run("git", ["checkout", "-B", workBranch])) {
+    throw new Error(`git checkout -B ${workBranch} failed`);
+  }
+
+  const rewind = (): void => {
+    run("git", ["reset", "--hard", `origin/${demoBranch}`]);
+    run("git", ["clean", "-fd"]);
+    run("git", ["checkout", demoBranch]);
+  };
+
+  try {
+    for (const payload of payloads) {
+      console.log(
+        `\n=== Applying ${payload.flag_key} (${payload.collapse_direction}) ===`,
+      );
+      await applyFlagLocally(payload);
+    }
+
+    const dirty = listDirtyPaths().filter(
+      (p) =>
+        p.startsWith("apps/") ||
+        p.startsWith("featurevisor/features/") ||
+        p.startsWith("featurevisor/tests/") ||
+        p.startsWith("featurevisor/.featurevisor/"),
+    );
+    if (dirty.length === 0) {
+      rewind();
+      throw new Error(
+        "No staged changes after successful gates (all-or-nothing abort)",
+      );
+    }
+
+    run("git", [
+      "config",
+      "user.email",
+      "stale-flags-agent@users.noreply.github.com",
+    ]);
+    run("git", ["config", "user.name", "stale-flags-agent"]);
+    run("git", ["add", ...dirty]);
+    const commit = runCaptured("git", [
+      "commit",
+      "-m",
+      `remove flags: ${payloads.map((p) => p.flag_key).join(", ")}`,
+    ]);
+    if (!commit.ok) {
+      rewind();
+      throw new Error(`git commit failed: ${commit.log.slice(0, 1000)}`);
+    }
+
+    if (!run("git", ["push", "-u", "origin", workBranch, "--force-with-lease"])) {
+      if (!run("git", ["push", "-u", "origin", workBranch, "--force"])) {
+        rewind();
+        throw new Error("git push failed");
+      }
+    }
+
+    const body = multiFlagBody(plan, payloads);
+    mkdirSync(path.join(root, ".local-data"), { recursive: true });
+    writeFileSync(path.join(root, `.local-data/pr-${plan.run_id}.md`), body);
+
+    let prUrl = "";
+    if (process.env.GITHUB_TOKEN) {
+      prUrl = await ensurePr({
+        repo: process.env.GITHUB_REPO ?? "lucamezzalira/stale-flag-cleanup",
+        demoBranch,
+        workBranch,
+        title: `Remove feature flags: ${payloads.map((p) => p.flag_key).join(", ")}`,
+        body,
+      });
+    } else {
+      prUrl = `file://.local-data/pr-${plan.run_id}.md`;
+    }
+
+    for (const payload of payloads) {
+      await appendDecisions([
+        {
+          decided_at: new Date().toISOString(),
+          run_id: payload.run_id,
+          flag_key: payload.flag_key,
+          verdict: "safe_to_remove",
+          route: payload.route ?? "lifecycle",
+          reason: payload.reason,
+          evidence: JSON.stringify(payload.evidence),
+          pr_url: prUrl,
+          datafile_revision: payload.datafile_revision ?? "",
+        },
+      ]);
+    }
+
+    run("git", ["checkout", demoBranch]);
+    writeSurgeonResult({
+      ok: true,
+      pr_url: prUrl,
+      run_id: plan.run_id,
+      branch_name: workBranch,
+      flags: payloads.map((p) => p.flag_key),
+    });
+    console.log(prUrl);
+  } catch (err) {
+    rewind();
+    const message = err instanceof Error ? err.message : String(err);
+    writeSurgeonResult({
+      ok: false,
+      pr_url: "",
+      run_id: plan.run_id,
+      branch_name: workBranch,
+      flags: payloads.map((p) => p.flag_key),
+      error: message.slice(0, 2000),
+    });
+    throw err;
+  }
+}
+
+async function runSingleFlagMode(): Promise<void> {
   const argv = process.argv.filter((a) => a !== "--");
   const dryRun = argv.includes("--dry-run");
   const payload = parsePayload();
@@ -635,85 +881,34 @@ async function main(): Promise<void> {
     return;
   }
 
-  const restore = (): void => {
-    run("git", ["reset", "--hard", "HEAD"]);
+  if (!run("git", ["fetch", "origin", demoBranch])) {
+    throw new Error(`git fetch origin ${demoBranch} failed`);
+  }
+  if (!run("git", ["checkout", demoBranch])) {
+    throw new Error(`git checkout ${demoBranch} failed`);
+  }
+  if (!run("git", ["reset", "--hard", `origin/${demoBranch}`])) {
+    throw new Error(`git reset --hard origin/${demoBranch} failed`);
+  }
+  if (!run("git", ["checkout", "-B", workBranch])) {
+    throw new Error(`git checkout -B ${workBranch} failed`);
+  }
+
+  const rewind = (): void => {
+    run("git", ["reset", "--hard", `origin/${demoBranch}`]);
     run("git", ["clean", "-fd"]);
     run("git", ["checkout", demoBranch]);
   };
 
-  if (process.env.GITHUB_TOKEN) {
-    if (!run("git", ["fetch", "origin", demoBranch])) {
-      throw new Error(`git fetch origin ${demoBranch} failed`);
-    }
-    if (!run("git", ["checkout", demoBranch])) {
-      throw new Error(`git checkout ${demoBranch} failed`);
-    }
-    if (!run("git", ["reset", "--hard", `origin/${demoBranch}`])) {
-      throw new Error(`git reset --hard origin/${demoBranch} failed`);
-    }
-    if (!run("git", ["checkout", "-B", workBranch])) {
-      throw new Error(`git checkout -B ${workBranch} failed`);
-    }
-  }
-
-  deleteYaml(payload.flag_key);
-  let files: string[] = [];
   try {
-    files = findReferenceFiles(payload.flag_key);
-  } catch (err) {
-    await appendDecisions([
-      {
-        decided_at: new Date().toISOString(),
-        run_id: payload.run_id,
-        flag_key: payload.flag_key,
-        verdict: "failed",
-        route: "surgeon_guardrail_breach",
-        reason: err instanceof Error ? err.message : String(err),
-        evidence: JSON.stringify(payload.evidence),
-        pr_url: "",
-        datafile_revision: payload.datafile_revision ?? "",
-      },
-    ]);
-    restore();
-    throw err;
-  }
-  if (files.length === 0) {
-    console.log("No app/package call sites found; YAML-only removal");
-  }
+    await applyFlagLocally(payload);
+    const body = fallbackBody(payload);
+    mkdirSync(path.join(root, ".local-data"), { recursive: true });
+    writeFileSync(
+      path.join(root, `.local-data/pr-${payload.flag_key}.md`),
+      body,
+    );
 
-  const { ok, gateLog } = await editLoop(payload, files);
-  if (!ok) {
-    console.error(`Surgeon failed for ${payload.flag_key}: ${gateLog.slice(0, 2000)}`);
-    await appendDecisions([
-      {
-        decided_at: new Date().toISOString(),
-        run_id: payload.run_id,
-        flag_key: payload.flag_key,
-        verdict: "failed",
-        route: gateLog.startsWith("rewind: denied") ||
-          gateLog.startsWith("rewind: path")
-          ? "surgeon_guardrail_breach"
-          : "surgeon_gate_exhausted",
-        reason: gateLog.slice(0, 4000),
-        evidence: JSON.stringify({
-          ...payload.evidence,
-          attempts: MAX_ATTEMPTS,
-        }),
-        pr_url: "",
-        datafile_revision: payload.datafile_revision ?? "",
-      },
-    ]);
-    restore();
-    process.exit(1);
-  }
-
-  const body = fallbackBody(payload);
-  mkdirSync(path.join(root, ".local-data"), { recursive: true });
-  const localPr = path.join(root, `.local-data/pr-${payload.flag_key}.md`);
-  writeFileSync(localPr, body);
-
-  let prUrl = `file://.local-data/pr-${payload.flag_key}.md`;
-  if (process.env.GITHUB_TOKEN) {
     const dirty = listDirtyPaths().filter(
       (p) =>
         p.startsWith("apps/") ||
@@ -722,27 +917,31 @@ async function main(): Promise<void> {
         p.startsWith("featurevisor/.featurevisor/"),
     );
     if (dirty.length === 0) {
-      restore();
+      rewind();
       throw new Error("No staged changes after successful gates");
     }
-    run("git", ["add", ...dirty]);
-    // CodeBuild clones have no global identity; set local for this repo only.
-    run("git", ["config", "user.email", "stale-flags-agent@users.noreply.github.com"]);
+    run("git", [
+      "config",
+      "user.email",
+      "stale-flags-agent@users.noreply.github.com",
+    ]);
     run("git", ["config", "user.name", "stale-flags-agent"]);
+    run("git", ["add", ...dirty]);
     const commit = runCaptured("git", [
       "commit",
       "-m",
       `remove flag ${payload.flag_key} (${payload.collapse_direction})`,
     ]);
     if (!commit.ok) {
-      restore();
+      rewind();
       throw new Error(`git commit failed: ${commit.log.slice(0, 1000)}`);
     }
-    if (!run("git", ["push", "-u", "origin", workBranch, "--force"])) {
-      restore();
-      throw new Error("git push failed");
-    }
-    try {
+    let prUrl = `file://.local-data/pr-${payload.flag_key}.md`;
+    if (process.env.GITHUB_TOKEN) {
+      if (!run("git", ["push", "-u", "origin", workBranch, "--force"])) {
+        rewind();
+        throw new Error("git push failed");
+      }
       prUrl = await ensurePr({
         repo: process.env.GITHUB_REPO ?? "lucamezzalira/stale-flag-cleanup",
         demoBranch,
@@ -750,32 +949,37 @@ async function main(): Promise<void> {
         title: `Remove feature flag ${payload.flag_key}`,
         body,
       });
-    } catch (err) {
-      console.error(err);
-      // Branch is already pushed; do not hard-reset remote. Just leave local on demo.
-      run("git", ["checkout", demoBranch]);
-      throw err;
     }
+    await appendDecisions([
+      {
+        decided_at: new Date().toISOString(),
+        run_id: payload.run_id,
+        flag_key: payload.flag_key,
+        verdict: "safe_to_remove",
+        route: payload.route ?? "lifecycle",
+        reason: payload.reason,
+        evidence: JSON.stringify(payload.evidence),
+        pr_url: prUrl,
+        datafile_revision: payload.datafile_revision ?? "",
+      },
+    ]);
     run("git", ["checkout", demoBranch]);
-  } else {
-    console.log(`No GITHUB_TOKEN — wrote ${localPr}`);
+    console.log(prUrl);
+  } catch (err) {
+    rewind();
+    throw err;
   }
-
-  await appendDecisions([
-    {
-      decided_at: new Date().toISOString(),
-      run_id: payload.run_id,
-      flag_key: payload.flag_key,
-      verdict: "safe_to_remove",
-      route: payload.route ?? "lifecycle",
-      reason: payload.reason,
-      evidence: JSON.stringify(payload.evidence),
-      pr_url: prUrl,
-      datafile_revision: payload.datafile_revision ?? "",
-    },
-  ]);
-  console.log(prUrl);
 }
+
+async function main(): Promise<void> {
+  const plan = loadPlan();
+  if (plan) {
+    await runPlanMode(plan);
+    return;
+  }
+  await runSingleFlagMode();
+}
+
 
 main().catch((err) => {
   console.error(err);

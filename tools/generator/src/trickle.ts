@@ -31,7 +31,7 @@ async function main(): Promise<void> {
       });
     };
 
-    add("one_click_buy", "evaluated", "true", 3 + Math.floor(rng() * 5));
+    add("express_pay_hint", "evaluated", "true", 3 + Math.floor(rng() * 5));
     add("wishlist", "evaluated", "false", 1);
     add("wishlist_sharing", "blocked_by_parent", "", 1);
     if (rng() > 0.4) {

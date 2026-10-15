@@ -12,7 +12,6 @@ import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as scheduler from "aws-cdk-lib/aws-scheduler";
 import * as schedulerTargets from "aws-cdk-lib/aws-scheduler-targets";
-import * as sns from "aws-cdk-lib/aws-sns";
 
 export interface AgentOrchestratorProps {
   agentSecrets: secretsmanager.ISecret;
@@ -23,12 +22,13 @@ export class AgentOrchestrator extends Construct {
   readonly stateMachine: sfn.StateMachine;
   readonly resultsBucket: s3.Bucket;
   readonly cluster: ecs.Cluster;
-  readonly notifyTopic: sns.Topic;
 
   constructor(scope: Construct, id: string, props: AgentOrchestratorProps) {
     super(scope, id);
 
     const { agentSecrets, githubRepo } = props;
+    const region = cdk.Stack.of(this).region;
+    const account = cdk.Stack.of(this).account;
 
     this.resultsBucket = new s3.Bucket(this, "ResultsBucket", {
       encryption: s3.BucketEncryption.S3_MANAGED,
@@ -54,38 +54,86 @@ export class AgentOrchestrator extends Construct {
     this.cluster = new ecs.Cluster(this, "Cluster", {
       clusterName: "stale-flags-agent",
       vpc,
-      containerInsights: false,
+      containerInsightsV2: ecs.ContainerInsights.DISABLED,
     });
 
-    const image = new ecrAssets.DockerImageAsset(this, "AgentImage", {
+    const exclude = [
+      "infra/cdk.out",
+      "**/node_modules",
+      "**/.local-data",
+      "featurevisor/datafiles",
+    ];
+
+    const scoutImage = new ecrAssets.DockerImageAsset(this, "ScoutImage", {
       directory: path.join(__dirname, "../.."),
-      file: "Dockerfile",
-      exclude: [
-        "infra/cdk.out",
-        "**/node_modules",
-        "**/.local-data",
-        "featurevisor/datafiles",
-      ],
+      file: "Dockerfile.scout",
+      exclude,
     });
 
-    const logGroup = new logs.LogGroup(this, "TaskLogs", {
+    const surgeonImage = new ecrAssets.DockerImageAsset(this, "SurgeonImage", {
+      directory: path.join(__dirname, "../.."),
+      file: "Dockerfile.surgeon",
+      exclude,
+    });
+
+    const scoutLogs = new logs.LogGroup(this, "ScoutLogs", {
+      retention: logs.RetentionDays.TWO_WEEKS,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    const surgeonLogs = new logs.LogGroup(this, "SurgeonLogs", {
       retention: logs.RetentionDays.TWO_WEEKS,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    const taskDef = new ecs.FargateTaskDefinition(this, "TaskDef", {
-      memoryLimitMiB: 4096,
-      cpu: 2048,
-      // Image is built on Apple Silicon locally; pin ARM64 so Fargate matches.
-      runtimePlatform: {
-        cpuArchitecture: ecs.CpuArchitecture.ARM64,
-        operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
+    const arm64 = {
+      cpuArchitecture: ecs.CpuArchitecture.ARM64,
+      operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
+    };
+
+    const scoutTask = new ecs.FargateTaskDefinition(this, "ScoutTask", {
+      memoryLimitMiB: 2048,
+      cpu: 1024,
+      runtimePlatform: arm64,
+    });
+    agentSecrets.grantRead(scoutTask.taskRole);
+    this.resultsBucket.grantReadWrite(scoutTask.taskRole);
+
+    const scoutContainer = scoutTask.addContainer("scout", {
+      image: ecs.ContainerImage.fromDockerImageAsset(scoutImage),
+      logging: ecs.LogDrivers.awsLogs({
+        streamPrefix: "scout",
+        logGroup: scoutLogs,
+      }),
+      environment: {
+        AWS_REGION: region,
+        AWS_REGION_NAME: region,
+        SCOUT_SOURCE: "tinybird",
+        AGENT_ORCHESTRATOR: "stepfunctions",
+        GITHUB_REPO: githubRepo,
+      },
+      secrets: {
+        GITHUB_TOKEN: ecs.Secret.fromSecretsManager(agentSecrets, "GITHUB_TOKEN"),
+        DEMO_BRANCH: ecs.Secret.fromSecretsManager(agentSecrets, "DEMO_BRANCH"),
+        TINYBIRD_API_HOST: ecs.Secret.fromSecretsManager(
+          agentSecrets,
+          "TINYBIRD_API_HOST",
+        ),
+        TINYBIRD_APPEND_TOKEN: ecs.Secret.fromSecretsManager(
+          agentSecrets,
+          "TINYBIRD_APPEND_TOKEN",
+        ),
+        TINYBIRD_TOKEN: ecs.Secret.fromSecretsManager(agentSecrets, "TINYBIRD_TOKEN"),
       },
     });
 
-    agentSecrets.grantRead(taskDef.taskRole);
-    this.resultsBucket.grantReadWrite(taskDef.taskRole);
-    taskDef.taskRole.addToPrincipalPolicy(
+    const surgeonTask = new ecs.FargateTaskDefinition(this, "SurgeonTask", {
+      memoryLimitMiB: 4096,
+      cpu: 2048,
+      runtimePlatform: arm64,
+    });
+    agentSecrets.grantRead(surgeonTask.taskRole);
+    this.resultsBucket.grantReadWrite(surgeonTask.taskRole);
+    surgeonTask.taskRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
         actions: [
           "bedrock:InvokeModel",
@@ -93,22 +141,21 @@ export class AgentOrchestrator extends Construct {
           "bedrock:GetInferenceProfile",
         ],
         resources: [
-          `arn:aws:bedrock:${cdk.Stack.of(this).region}:${cdk.Stack.of(this).account}:inference-profile/us.anthropic.claude-*`,
+          `arn:aws:bedrock:${region}:${account}:inference-profile/us.anthropic.claude-*`,
           "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
         ],
       }),
     );
 
-    const container = taskDef.addContainer("agent", {
-      image: ecs.ContainerImage.fromDockerImageAsset(image),
+    const surgeonContainer = surgeonTask.addContainer("surgeon", {
+      image: ecs.ContainerImage.fromDockerImageAsset(surgeonImage),
       logging: ecs.LogDrivers.awsLogs({
-        streamPrefix: "agent",
-        logGroup,
+        streamPrefix: "surgeon",
+        logGroup: surgeonLogs,
       }),
       environment: {
-        AWS_REGION: cdk.Stack.of(this).region,
-        AWS_REGION_NAME: cdk.Stack.of(this).region,
-        SCOUT_SOURCE: "tinybird",
+        AWS_REGION: region,
+        AWS_REGION_NAME: region,
         AGENT_ORCHESTRATOR: "stepfunctions",
         BEDROCK_MODEL_ID: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         BEDROCK_DISABLED: "0",
@@ -129,14 +176,26 @@ export class AgentOrchestrator extends Construct {
       },
     });
 
-    this.notifyTopic = new sns.Topic(this, "MergeGateTopic", {
-      topicName: "stale-flags-merge-gate",
-      displayName: "Stale flag cleanup merge gate",
-    });
+    const planKey = sfn.JsonPath.format(
+      "{}/plan.json",
+      sfn.JsonPath.stringAt("$$.Execution.Name"),
+    );
+    const planUri = sfn.JsonPath.format(
+      `s3://${this.resultsBucket.bucketName}/{}/plan.json`,
+      sfn.JsonPath.stringAt("$$.Execution.Name"),
+    );
+    const surgeonResultKey = sfn.JsonPath.format(
+      "{}/surgeon-result.json",
+      sfn.JsonPath.stringAt("$$.Execution.Name"),
+    );
+    const surgeonResultUri = sfn.JsonPath.format(
+      `s3://${this.resultsBucket.bucketName}/{}/surgeon-result.json`,
+      sfn.JsonPath.stringAt("$$.Execution.Name"),
+    );
 
     const scout = new tasks.EcsRunTask(this, "Scout", {
       cluster: this.cluster,
-      taskDefinition: taskDef,
+      taskDefinition: scoutTask,
       launchTarget: new tasks.EcsFargateLaunchTarget({
         platformVersion: ecs.FargatePlatformVersion.LATEST,
       }),
@@ -145,17 +204,8 @@ export class AgentOrchestrator extends Construct {
       integrationPattern: sfn.IntegrationPattern.RUN_JOB,
       containerOverrides: [
         {
-          containerDefinition: container,
-          environment: [
-            { name: "AGENT_ROLE", value: "scout" },
-            {
-              name: "RESULT_S3_URI",
-              value: sfn.JsonPath.format(
-                `s3://${this.resultsBucket.bucketName}/{}/scout.json`,
-                sfn.JsonPath.stringAt("$$.Execution.Name"),
-              ),
-            },
-          ],
+          containerDefinition: scoutContainer,
+          environment: [{ name: "RESULT_S3_URI", value: planUri }],
         },
       ],
       resultPath: sfn.JsonPath.DISCARD,
@@ -167,20 +217,13 @@ export class AgentOrchestrator extends Construct {
       action: "getObject",
       parameters: {
         Bucket: this.resultsBucket.bucketName,
-        Key: sfn.JsonPath.format(
-          "{}/scout.json",
-          sfn.JsonPath.stringAt("$$.Execution.Name"),
-        ),
+        Key: planKey,
       },
       iamResources: [this.resultsBucket.arnForObjects("*")],
-      resultSelector: {
-        "body.$": "$.Body",
-      },
+      resultSelector: { "body.$": "$.Body" },
       resultPath: "$.scoutRaw",
     });
 
-    // CallAwsService s3:getObject returns Body as a UTF-8 string in ASL
-    // (not base64). Base64Decode corrupts the JSON.
     const parseScout = new sfn.Pass(this, "ParseScoutResult", {
       parameters: {
         "scout.$": "States.StringToJson($.scoutRaw.body)",
@@ -191,7 +234,7 @@ export class AgentOrchestrator extends Construct {
 
     const surgeon = new tasks.EcsRunTask(this, "Surgeon", {
       cluster: this.cluster,
-      taskDefinition: taskDef,
+      taskDefinition: surgeonTask,
       launchTarget: new tasks.EcsFargateLaunchTarget({
         platformVersion: ecs.FargatePlatformVersion.LATEST,
       }),
@@ -200,30 +243,15 @@ export class AgentOrchestrator extends Construct {
       integrationPattern: sfn.IntegrationPattern.RUN_JOB,
       containerOverrides: [
         {
-          containerDefinition: container,
+          containerDefinition: surgeonContainer,
           environment: [
-            { name: "AGENT_ROLE", value: "surgeon" },
-            {
-              name: "FLAG_KEY",
-              value: sfn.JsonPath.stringAt("$.flag_key"),
-            },
-            {
-              name: "SURGEON_PAYLOAD_B64",
-              value: sfn.JsonPath.stringAt("$.payload_b64"),
-            },
-            {
-              name: "RESULT_S3_URI",
-              value: sfn.JsonPath.format(
-                `s3://${this.resultsBucket.bucketName}/{}/surgeon-{}.json`,
-                sfn.JsonPath.stringAt("$$.Execution.Name"),
-                sfn.JsonPath.stringAt("$.flag_key"),
-              ),
-            },
+            { name: "PLAN_S3_URI", value: planUri },
+            { name: "RESULT_S3_URI", value: surgeonResultUri },
           ],
         },
       ],
       resultPath: sfn.JsonPath.DISCARD,
-      taskTimeout: sfn.Timeout.duration(cdk.Duration.minutes(25)),
+      taskTimeout: sfn.Timeout.duration(cdk.Duration.minutes(50)),
     });
 
     const loadSurgeon = new tasks.CallAwsService(this, "LoadSurgeonResult", {
@@ -231,73 +259,40 @@ export class AgentOrchestrator extends Construct {
       action: "getObject",
       parameters: {
         Bucket: this.resultsBucket.bucketName,
-        Key: sfn.JsonPath.format(
-          "{}/surgeon-{}.json",
-          sfn.JsonPath.stringAt("$$.Execution.Name"),
-          sfn.JsonPath.stringAt("$.flag_key"),
-        ),
+        Key: surgeonResultKey,
       },
       iamResources: [this.resultsBucket.arnForObjects("*")],
-      resultSelector: {
-        "body.$": "$.Body",
-      },
+      resultSelector: { "body.$": "$.Body" },
       resultPath: "$.surgeonRaw",
     });
 
     const parseSurgeon = new sfn.Pass(this, "ParseSurgeonResult", {
       parameters: {
+        "scout.$": "$.scout",
         "result.$": "States.StringToJson($.surgeonRaw.body)",
       },
-      outputPath: "$.result",
     });
 
-    const surgeonFailed = new sfn.Pass(this, "SurgeonFailed", {
-      parameters: {
-        "flag_key.$": "$.flag_key",
-        ok: false,
-        pr_url: "",
-        "error.$": "$.error.Error",
-      },
-    });
-
-    const surgeonChain = surgeon
-      .addCatch(surgeonFailed, {
-        errors: ["States.ALL"],
-        resultPath: "$.error",
-      })
-      .next(
-        loadSurgeon
-          .addCatch(surgeonFailed, {
-            errors: ["States.ALL"],
-            resultPath: "$.error",
-          })
-          .next(parseSurgeon),
-      );
-
-    const removeFlags = new sfn.Map(this, "RemoveFlags", {
-      itemsPath: sfn.JsonPath.stringAt("$.scout.candidates"),
-      maxConcurrency: 1,
-      resultPath: "$.prs",
-    });
-    removeFlags.itemProcessor(surgeonChain);
-
-    const notify = new tasks.SnsPublish(this, "NotifyMergeGate", {
-      topic: this.notifyTopic,
-      message: sfn.TaskInput.fromObject({
-        notice: "Merge gate: review and merge agent PRs into demo",
-        "run_id.$": "$.scout.run_id",
-        "prs.$": "$.prs",
-        "execution.$": "$$.Execution.Id",
-      }),
-      resultPath: sfn.JsonPath.DISCARD,
+    const surgeonFailed = new sfn.Fail(this, "SurgeonFailed", {
+      error: "SurgeonFailed",
+      cause: "Surgeon Fargate task failed or did not write a result",
     });
 
     const succeeded = new sfn.Succeed(this, "Succeeded");
 
+    const surgeonChain = surgeon
+      .addCatch(surgeonFailed, { errors: ["States.ALL"] })
+      .next(
+        loadSurgeon
+          .addCatch(surgeonFailed, { errors: ["States.ALL"] })
+          .next(parseSurgeon)
+          .next(succeeded),
+      );
+
     const hasCandidates = new sfn.Choice(this, "HasCandidates")
       .when(
         sfn.Condition.isPresent("$.scout.candidates[0]"),
-        removeFlags.next(notify).next(succeeded),
+        surgeonChain,
       )
       .otherwise(nothingToDo);
 
@@ -316,12 +311,11 @@ export class AgentOrchestrator extends Construct {
     this.stateMachine = new sfn.StateMachine(this, "StateMachine", {
       stateMachineName: "stale-flags-cleanup",
       definitionBody: sfn.DefinitionBody.fromChainable(definition),
-      timeout: cdk.Duration.hours(1),
+      timeout: cdk.Duration.hours(2),
       tracingEnabled: true,
     });
 
     this.resultsBucket.grantRead(this.stateMachine);
-    this.notifyTopic.grantPublish(this.stateMachine);
 
     const schedulerRole = new iam.Role(this, "SchedulerRole", {
       assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com"),
@@ -329,8 +323,6 @@ export class AgentOrchestrator extends Construct {
     this.stateMachine.grantStartExecution(schedulerRole);
 
     new scheduler.Schedule(this, "NightlyAgent", {
-      // New physical name so the deploy can create this while the old
-      // CodeBuild-targeted schedule (stale-flags-nightly-utc) is deleted.
       scheduleName: "stale-flags-sfn-nightly-utc",
       description: "Start stale-flag Step Functions cleanup at midnight UTC",
       schedule: scheduler.ScheduleExpression.cron({

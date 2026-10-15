@@ -230,9 +230,6 @@ export class StaleFlagsStack extends cdk.Stack {
     new cdk.CfnOutput(this, "AgentResultsBucketName", {
       value: agent.resultsBucket.bucketName,
     });
-    new cdk.CfnOutput(this, "AgentNotifyTopicArn", {
-      value: agent.notifyTopic.topicArn,
-    });
     new cdk.CfnOutput(this, "GitHubPublishRoleArn", {
       value: ghaPublishRole.roleArn,
     });

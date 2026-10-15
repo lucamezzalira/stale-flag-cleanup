@@ -1,0 +1,6 @@
+feature: loyalty_stamp_banner
+assertions:
+  - description: production everyone off
+    environment: production
+    at: 50
+    expectedToBeEnabled: false

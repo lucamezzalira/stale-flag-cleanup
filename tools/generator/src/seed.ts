@@ -193,9 +193,16 @@ async function main(): Promise<void> {
       const isSticky = b.id === stickyId;
       const isModern = !isSticky;
 
-      // one_click_buy: heavy settled traffic on modern builds
+      // express_pay_hint: heavy settled traffic on modern builds (keep_gated)
       if (isModern) {
-        bump(ds, "one_click_buy", b.id, "evaluated", "true", buildSessions * 3);
+        bump(
+          ds,
+          "express_pay_hint",
+          b.id,
+          "evaluated",
+          "true",
+          buildSessions * 3,
+        );
       }
 
       // shipping_estimator: 60/40 split on modern
@@ -253,18 +260,18 @@ async function main(): Promise<void> {
         );
       }
 
-      // promo_banner: only before window (handled outside) — none inside
+      // loyalty_stamp_banner: only before window (handled outside)
       // search_ranking_v2: sparse — sprinkle later
     }
   }
 
-  // promo_banner_2025: activity ending before window
+  // loyalty_stamp_banner: activity ending before window (delete_gated / abandoned)
   for (let offset = days + 40; offset > days + 5; offset--) {
     const day = new Date(now);
     day.setUTCDate(day.getUTCDate() - offset);
     const ds = dayString(day);
     const b = builds[0]!;
-    bump(ds, "promo_banner_2025", b.id, "evaluated", "false", 50);
+    bump(ds, "loyalty_stamp_banner", b.id, "evaluated", "false", 50);
   }
 
   // search_ranking_v2: 5–15 evaluated across whole window

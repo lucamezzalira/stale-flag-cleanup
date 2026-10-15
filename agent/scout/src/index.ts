@@ -62,52 +62,53 @@ async function callTinybirdEndpoint<T>(
   const token = process.env.TINYBIRD_TOKEN ?? "";
   if (!token) throw new Error("TINYBIRD_TOKEN is required for Tinybird mode");
 
-  // Prefer Tinybird MCP Streamable HTTP (call_endpoint). Fall back to REST pipes.
+  // REST-first (deterministic scout in Fargate). Optional MCP if SCOUT_MCP=1.
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
   try {
-    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-    const { StreamableHTTPClientTransport } = await import(
-      "@modelcontextprotocol/sdk/client/streamableHttp.js"
+    const res = await fetch(
+      `${host.replace(/\/$/, "")}/v0/pipes/${endpointName}.json?${qs}`,
+      { headers: { Authorization: `Bearer ${token}` } },
     );
-    const url = new URL("https://mcp.tinybird.co");
-    url.searchParams.set("token", token);
-    url.searchParams.set("host", host);
-    const transport = new StreamableHTTPClientTransport(url);
-    const client = new Client({ name: "stale-flags-scout", version: "0.1.0" });
-    await client.connect(transport);
-    try {
-      const result = await client.callTool({
-        name: "call_endpoint",
-        arguments: {
-          endpoint_name: endpointName,
-          params,
-          response_format: "JSON",
-        },
-      });
-      const text = extractMcpText(result);
-      const parsed = JSON.parse(text) as { data?: T[] } | T[];
-      if (Array.isArray(parsed)) return parsed;
-      return parsed.data ?? [];
-    } finally {
-      await client.close().catch(() => undefined);
+    const text = await res.text();
+    if (!res.ok) {
+      throw new Error(`Tinybird pipe ${endpointName}: ${res.status} ${text}`);
     }
-  } catch (err) {
+    const json = JSON.parse(text) as { data: T[] };
+    return json.data ?? [];
+  } catch (restErr) {
+    if (process.env.SCOUT_MCP !== "1") throw restErr;
     console.warn(
-      `Tinybird MCP call_endpoint failed (${err instanceof Error ? err.message : err}); falling back to REST`,
+      `Tinybird REST failed (${restErr instanceof Error ? restErr.message : restErr}); trying MCP`,
     );
   }
 
-  const qs = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
-  const res = await fetch(
-    `${host.replace(/\/$/, "")}/v0/pipes/${endpointName}.json?${qs}`,
-    { headers: { Authorization: `Bearer ${token}` } },
+  const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+  const { StreamableHTTPClientTransport } = await import(
+    "@modelcontextprotocol/sdk/client/streamableHttp.js"
   );
-  const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`Tinybird pipe ${endpointName}: ${res.status} ${text}`);
+  const url = new URL("https://mcp.tinybird.co");
+  url.searchParams.set("token", token);
+  url.searchParams.set("host", host);
+  const transport = new StreamableHTTPClientTransport(url);
+  const client = new Client({ name: "stale-flags-scout", version: "0.1.0" });
+  await client.connect(transport);
+  try {
+    const result = await client.callTool({
+      name: "call_endpoint",
+      arguments: {
+        endpoint_name: endpointName,
+        params,
+        response_format: "JSON",
+      },
+    });
+    const text = extractMcpText(result);
+    const parsed = JSON.parse(text) as { data?: T[] } | T[];
+    if (Array.isArray(parsed)) return parsed;
+    return parsed.data ?? [];
+  } finally {
+    await client.close().catch(() => undefined);
   }
-  const json = JSON.parse(text) as { data: T[] };
-  return json.data ?? [];
 }
 
 function extractMcpText(result: unknown): string {
@@ -257,7 +258,7 @@ async function main(): Promise<void> {
   const tinybird = useTinybird() || argv.includes("--tinybird");
   const id = runId();
   console.log(
-    `Scout run_id=${id} dryRun=${dryRun || !full} source=${tinybird ? "tinybird-mcp" : "local"} dispatch=${!noDispatch}\n`,
+    `Scout run_id=${id} dryRun=${dryRun || !full} source=${tinybird ? "tinybird-rest" : "local"} dispatch=${!noDispatch}\n`,
   );
 
   const localMeta = tinybird ? null : await loadFromLocal();
@@ -363,9 +364,22 @@ function writeOrchestratorOutput(
   results: SafetyCheckResult[],
   safe: SafetyCheckResult[],
 ): void {
+  // Independently safe only (already filtered). Leaf-first among parent edges
+  // when present; no inventing inconclusive children onto the plan.
+  const byKey = new Map(safe.map((r) => [r.flag_key, r]));
+  const parentOf = (r: SafetyCheckResult): string =>
+    String(r.evidence?.parent_key ?? "");
+  const sorted = [...safe].sort((a, b) => {
+    const aParent = parentOf(a);
+    const bParent = parentOf(b);
+    if (aParent && byKey.has(aParent) && aParent === b.flag_key) return -1;
+    if (bParent && byKey.has(bParent) && bParent === a.flag_key) return 1;
+    return a.flag_key.localeCompare(b.flag_key);
+  });
   const out = {
     run_id: runIdValue,
-    candidates: safe.map((r) => ({
+    branch_name: `agent/cleanup-${runIdValue}`,
+    candidates: sorted.map((r) => ({
       flag_key: r.flag_key,
       verdict: r.verdict,
       route: r.route,
@@ -373,6 +387,7 @@ function writeOrchestratorOutput(
       target_value: r.target_value,
       reason: r.reason,
       datafile_revision: r.datafile_revision ?? "",
+      parent_key: parentOf(r),
       payload_b64: Buffer.from(
         JSON.stringify({ ...r, run_id: runIdValue }),
       ).toString("base64url"),

@@ -75,16 +75,16 @@ flowchart TB
 flowchart LR
   subgraph github [GitHub]
     DEMO[demo branch]
-    PR[agent/remove-* PRs]
+    PR[one multi-flag PR]
     GHA[publish-flags.yml OIDC]
   end
 
   subgraph aws [AWS us-east-1]
     SCH[EventBridge Scheduler<br/>midnight UTC]
     SFN[Step Functions<br/>stale-flags-cleanup]
-    ECS[ECS Fargate workers<br/>scout / surgeon]
-    S3R[S3 results handoff]
-    SNS[SNS merge-gate]
+    ScoutECS[Fargate scout]
+    SurgECS[Fargate surgeon]
+    S3R[S3 plan handoff]
     SM[Secrets Manager<br/>stale-flags/agent]
     BR[Bedrock Converse<br/>Sonnet 4.5]
     S3W[S3 web bucket]
@@ -100,16 +100,17 @@ flowchart LR
   end
 
   SCH -->|StartExecution| SFN
-  SFN --> ECS
-  SM --> ECS
-  ECS -->|clone demo| DEMO
-  ECS -->|call_endpoint / REST| PIPES
-  ECS -->|Converse| BR
-  ECS -->|JSON results| S3R
+  SFN --> ScoutECS
+  SFN --> SurgECS
+  SM --> ScoutECS
+  SM --> SurgECS
+  ScoutECS -->|clone demo| DEMO
+  ScoutECS -->|REST pipes| PIPES
+  ScoutECS -->|plan.json| S3R
   S3R --> SFN
-  ECS -->|gh pr create| PR
-  ECS -->|appendDecisions| EV
-  SFN --> SNS
+  SurgECS -->|Converse| BR
+  SurgECS -->|gh pr create| PR
+  SurgECS -->|appendDecisions| EV
   PR -->|human merge| DEMO
   DEMO --> GHA
   GHA -->|assume| ROLE
@@ -121,7 +122,7 @@ flowchart LR
   CFD -->|datafileUrl| USER
 ```
 
-ECS Fargate is the agent host (git, pnpm, ripgrep, Bedrock). Step Functions owns Scout → Choice → Map(Surgeon) → Notify. It is not a zip Lambda.
+Split Fargate images: scout (no Bedrock) and surgeon (Bedrock + gates). Step Functions: Scout → Choice → one Surgeon session → Succeeded. Merge gate = GitHub PR notifications (no SNS).
 
 ## Sequence: nightly / on-demand cleanup
 
@@ -136,63 +137,54 @@ sequenceDiagram
   participant Surg as Fargate surgeon
   participant Bedrock as Bedrock Sonnet 4.5
   participant GH as GitHub demo
-  participant SNS as SNS merge-gate
   participant GHA as publish-flags
   participant CDN as CloudFront
 
   Sch->>SFN: StartExecution
-  SFN->>Scout: AGENT_ROLE=scout --emit-json --no-dispatch
-  Scout->>Scout: clone demo, pnpm install, build workspace pkgs
-  Scout->>TB: flag_candidates + cleanup_report / flag_safety_check
-  TB-->>Scout: verdicts + collapse_direction
+  SFN->>Scout: emit-json plan
+  Scout->>TB: flag_candidates + cleanup_report REST
+  TB-->>Scout: independently safe_to_remove only
   Scout->>TB: append cleanup_decision_log
-  Scout->>S3: scout.json candidates + payload_b64
+  Scout->>S3: plan.json
   SFN->>S3: GetObject + parse
   alt no candidates
     SFN-->>SFN: NothingToDo
-  else safe_to_remove present
-    loop Map MaxConcurrency 1
-      SFN->>Surg: FLAG_KEY + SURGEON_PAYLOAD_B64
-      Surg->>Bedrock: Converse edit loop (heuristic fallback)
-      Bedrock-->>Surg: file contents
-      Surg->>Surg: gates tsc vite featurevisor rg allowlist
-      Surg->>GH: commit + PR into demo
-      Surg->>TB: append decision with pr_url
-      Surg->>S3: surgeon-FLAG.json
+  else plan non-empty
+    SFN->>Surg: PLAN_S3_URI
+    loop each planned flag locally
+      Surg->>Bedrock: Converse edit loop
+      Surg->>Surg: gates
     end
-    SFN->>SNS: merge-gate notice (no auto-merge)
+    Surg->>GH: one push + one PR all-or-nothing
+    Surg->>S3: surgeon-result.json
   end
-  Note over GH: Human merges PRs (agent never merges)
+  Note over GH: Human merges (agent never merges)
   GH->>GHA: push to demo
-  GHA->>CDN: sync datafile + web + invalidate
-  Note over CDN: Listing loses promo UI;<br/>Checkout keeps One-click buy CTA
+  GHA->>CDN: sync + invalidate
 ```
 
 ### How data moves
 
-1. **Featurevisor** holds flag definitions (`featurevisor/features/*.yml`), including `deprecated` / `archived` and parent/child links. Built **datafiles** ship to S3/CloudFront (`pnpm infra:sync` or `publish-flags.yml`).
-2. **`apps/web` + `flag-client`** evaluate flags from that datafile. In this PoC, history is mostly **synthetic** from the generator; the shop proves the client path and post-cleanup UI.
-3. **`publish-defs`** snapshots YAML into `flag_definitions` (rollout %, `target_value`, lifecycle). Collapse direction comes from definitions, not from guessing in code.
-4. **`tools/generator`** seeds ~90 days of activity so all eight demo verdicts reproduce.
-5. **Tinybird** exposes three pipes: `flag_candidates`, `flag_safety_check`, `cleanup_report`. Scout prefers Tinybird MCP `call_endpoint`, with REST fallback.
-6. **Scout** (Fargate) logs decisions to `cleanup_decision_log` and writes `safe_to_remove` candidates to S3 (`--emit-json --no-dispatch`). Step Functions does not spawn surgeons from scout process exit codes.
-7. **Surgeon** (Fargate Map item) asks **Bedrock Converse** (Sonnet 4.5) to edit app call sites, with a deterministic heuristic fallback. It deletes Featurevisor YAML, runs gates (tsc, vite, featurevisor lint/test, leftover `rg`, path allowlist), then opens a PR against **`demo` only** and writes a result JSON to S3.
-8. **SNS** publishes a merge-gate notice. **Humans** merge. Publish syncs CDN. QA playbook: `docs/qa-agent.md` (Cursor canvas per run).
+1. **Featurevisor** holds flag definitions; datafiles ship to S3/CloudFront.
+2. **`apps/web` + `flag-client`** evaluate from that datafile.
+3. **`publish-defs` / seed** populate Tinybird definitions + activity.
+4. **Tinybird** pipes are the only eligibility API. Scout is REST-first.
+5. **Scout** plans independently `safe_to_remove` flags (`collapse_direction != none`) into S3 `plan.json`. It does not invent nest deletes for parent-gated inconclusive children.
+6. **Surgeon** applies the whole plan in one Fargate session, then opens **one** PR only if every flag passes gates.
+7. **Humans** merge. Publish syncs CDN. QA: `docs/qa-agent.md`.
 
 ### What changed vs the first PoC sketch
 
 | Area | Before | Now |
 |---|---|---|
-| Scout evidence | Local `.local-data` / TS verdicts | Tinybird MCP + REST pipes (TS mirror kept for offline) |
-| Surgeon edits | Hardcoded Listing/Checkout paths | Bedrock Converse loop + heuristic fallback |
-| Surgeon PR prose | Ollama optional | Fallback PR body from payload (Ollama still optional locally) |
-| Agent host | CodeBuild + Scheduler | EventBridge → Step Functions → ECS Fargate + S3 result handoff + SNS merge-gate |
-| Model | n/a | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
-| Publish path | Manual sync | `.github/workflows/publish-flags.yml` (OIDC) + `pnpm infra:sync` fallback |
-| Decision log | Local NDJSON | Tinybird `cleanup_decision_log` (truncate on seed/reset) |
-| QA | Ad hoc | `docs/qa-agent.md` + Cursor canvas reports |
+| Scout evidence | Local store | Tinybird REST pipes |
+| Surgeon | Per-flag Map / CodeBuild | One Fargate session, one multi-flag PR |
+| Agent host | CodeBuild | EventBridge → SFN → split Fargate images |
+| Merge notify | SNS stub | GitHub PR notifications |
+| Model | n/a | Sonnet 4.5 Converse |
+| QA | Ad hoc | Production-bar playbook + new-flag E2E |
 
-Refusals (`blocked`, `inconclusive`) stay. Only `promo_banner_2025` (`delete_gated_branch`) and `one_click_buy` (`keep_gated_branch`) become PRs.
+Refusals stay. Safe removals are whatever Tinybird marks safe (E2E fixtures: `loyalty_stamp_banner`, `express_pay_hint`).
 
 ### Parts in this repo
 
@@ -235,7 +227,7 @@ pnpm report
 SCOUT_SOURCE=tinybird pnpm agent:scout -- --dry-run
 ```
 
-You should see `promo_banner_2025` and `one_click_buy` as `safe_to_remove`, and refusals for the other six.
+You should see `loyalty_stamp_banner` and `express_pay_hint` as `safe_to_remove` (and any other independently safe leaves), plus refusals for wishlist / shipping / search / checkout_redesign.
 
 ```bash
 export VITE_DATAFILE_URL=http://127.0.0.1:4099/production/featurevisor-all.json

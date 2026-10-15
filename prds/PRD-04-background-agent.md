@@ -150,18 +150,13 @@ agent may touch is the same principle as a query surface scoped to exactly what 
 
 ## Acceptance criteria
 
-- A dry run prints eight candidates with the verdicts from PRD-02 and proposes action on two
-- A full run opens exactly two pull requests, for `promo_banner_2025` and `one_click_buy`
-- The `promo_banner_2025` pull request deletes the gated branch, the `one_click_buy` pull
-  request keeps it and removes the fallback, and neither direction was inferred from the code
-- Both pull requests remove the flag from the YAML, the test spec and every call site, and
-  pass all five gates
-- `cleanup_decisions` contains eight rows for the run, one per candidate, with reasons
-- The four refusals are legible to someone reading only `cleanup_decisions`
-- Running the scout twice in a row opens no second pull request for a flag that already has
-  one open
-- After a merge and a definitions publish, the removed flag no longer appears as a candidate
-- Deliberately breaking a gate causes no pull request to be opened and a `failed` row to be
-  written
-- `pnpm demo:reset` returns the repository, GitHub and `flag_definitions` to a clean state in
-  one command, without touching `main`
+- A dry run prints all candidates with pipe verdicts and proposes action only on independently `safe_to_remove` flags (`collapse_direction != none`)
+- A full orchestrated run opens **one** pull request covering every planned safe flag (all-or-nothing; no mid-plan push). E2E fixtures use new keys such as `loyalty_stamp_banner` / `express_pay_hint`, not a hardcoded two-key allowlist
+- Collapse direction comes from Tinybird (`delete_gated_branch` vs `keep_gated_branch`), never inferred ad hoc in the surgeon
+- The PR removes each planned flag from YAML, test spec, and call sites, and passes all five gates
+- `cleanup_decision_log` records every candidate for the run, including refusals
+- Refusals (wishlist nest, mid-ramp, thin evidence, sticky build) stay readable from the log alone
+- Re-running scout while `last_pr_url` is set opens no second PR for those flags
+- After merge + publish, removed flags leave the candidate set
+- Gate failure opens no PR and writes `failed` rows (working tree rewound)
+- `pnpm demo:reset` restores repo + Tinybird demo tables without touching `main`
