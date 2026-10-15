@@ -1,8 +1,0 @@
-feature: catalog_clearance_rail
-assertions:
-  - at: 50
-    description: "Clearance rail is off at 0%"
-    environment: production
-    context:
-      userId: user-smoke-1
-    expectedToBeEnabled: false

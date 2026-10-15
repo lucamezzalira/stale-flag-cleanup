@@ -4,7 +4,6 @@ import { useFlag } from "../flags";
 export function CheckoutPage() {
   const redesign = useFlag("checkout_redesign");
   const shipping = useFlag("shipping_estimator");
-  const trust = useFlag("checkout_trust_badges");
 
   return (
     <div>
@@ -42,18 +41,9 @@ export function CheckoutPage() {
                 Express pay hint: skip the address book.
               </p>
             </div>
-            {trust.enabled ? (
-              <p className="muted" style={{ marginTop: "0.75rem" }}>
-                Trust badges: Secure checkout · Free returns · Carbon-neutral ship
-              </p>
-            ) : null}
-            <FlagCallout
-              flagKey="checkout_trust_badges"
-              enabled={trust.enabled}
-              variation={trust.variation}
-              outcome={trust.outcome}
-              blockedBy={trust.blockedBy}
-            />
+            <p className="muted" style={{ marginTop: "0.75rem" }}>
+              Trust badges: Secure checkout · Free returns · Carbon-neutral ship
+            </p>
           </section>
 
           <section className="panel">
