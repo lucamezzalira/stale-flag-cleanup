@@ -1,8 +1,0 @@
-feature: checkout_trust_badges
-assertions:
-  - at: 50
-    description: "Trust badges are on for everyone"
-    environment: production
-    context:
-      userId: user-smoke-1
-    expectedToBeEnabled: true

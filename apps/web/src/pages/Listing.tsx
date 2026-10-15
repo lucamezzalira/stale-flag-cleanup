@@ -11,7 +11,6 @@ const PRODUCTS = [
 ];
 
 export function ListingPage() {
-  const clearance = useFlag("catalog_clearance_rail");
   const winter = useFlag("nav_winter_ribbon");
 
   return (
@@ -37,20 +36,6 @@ export function ListingPage() {
         variation={winter.variation}
         outcome={winter.outcome}
         blockedBy={winter.blockedBy}
-      />
-
-      {clearance.enabled ? (
-        <section className="panel" style={{ marginBottom: "1rem" }}>
-          <h2>Clearance rail</h2>
-          <p className="muted">End-of-season picks. Evidence-only abandoned fixture.</p>
-        </section>
-      ) : null}
-      <FlagCallout
-        flagKey="catalog_clearance_rail"
-        enabled={clearance.enabled}
-        variation={clearance.variation}
-        outcome={clearance.outcome}
-        blockedBy={clearance.blockedBy}
       />
 
       <div className="grid" style={{ marginTop: "1rem" }}>
