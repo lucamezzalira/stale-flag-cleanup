@@ -30,7 +30,8 @@ export class StaleFlagsStack extends cdk.Stack {
           TINYBIRD_API_HOST: "https://api.us-east.aws.tinybird.co",
           TINYBIRD_APPEND_TOKEN: "REPLACE_ME",
           TINYBIRD_TOKEN: "REPLACE_ME",
-          TINYBIRD_MCP_TOKEN: "REPLACE_ME",
+          // TINYBIRD_MCP_TOKEN is written only by put-secrets.sh. Do not add
+          // keys here after first create; CFN regenerates the secret string.
         }),
         generateStringKey: "_cdk_placeholder",
       },
