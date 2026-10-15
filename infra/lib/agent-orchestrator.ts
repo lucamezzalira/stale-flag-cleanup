@@ -109,7 +109,8 @@ export class AgentOrchestrator extends Construct {
       environment: {
         AWS_REGION: region,
         AWS_REGION_NAME: region,
-        SCOUT_SOURCE: "tinybird",
+        // MCP-first: demo sells Tinybird's hosted MCP as the governed query surface.
+        SCOUT_SOURCE: "mcp",
         AGENT_ORCHESTRATOR: "stepfunctions",
         GITHUB_REPO: githubRepo,
       },

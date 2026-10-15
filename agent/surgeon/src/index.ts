@@ -668,7 +668,39 @@ type SafetyCheckRow = {
   target_value?: string;
 };
 
-/** REST-only Tinybird pipe call (mirrors scout; no MCP fallback). */
+function extractMcpText(result: unknown): string {
+  const r = result as {
+    content?: Array<{ type?: string; text?: string }>;
+    structuredContent?: unknown;
+  };
+  if (typeof r.structuredContent === "object" && r.structuredContent) {
+    return JSON.stringify(r.structuredContent);
+  }
+  const text = (r.content ?? [])
+    .filter((c) => c.type === "text" && c.text)
+    .map((c) => c.text!)
+    .join("\n");
+  if (!text) throw new Error("Empty MCP call_endpoint response");
+  const start = text.search(/[\{\[]/);
+  if (start === -1) return text;
+  const slice = text.slice(start);
+  try {
+    JSON.parse(slice);
+    return slice;
+  } catch {
+    for (let end = slice.length; end > 1; end--) {
+      try {
+        JSON.parse(slice.slice(0, end));
+        return slice.slice(0, end);
+      } catch {
+        /* continue */
+      }
+    }
+  }
+  return text;
+}
+
+/** Tinybird MCP first (article surface), REST fallback. */
 async function callTinybirdEndpoint<T>(
   endpointName: string,
   params: Record<string, string | number> = {},
@@ -679,28 +711,67 @@ async function callTinybirdEndpoint<T>(
   if (!token) {
     throw new Error("TINYBIRD_TOKEN is required to re-verify flags before edit");
   }
-  const qs = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
-  const res = await fetch(
-    `${host.replace(/\/$/, "")}/v0/pipes/${endpointName}.json?${qs}`,
-    { headers: { Authorization: `Bearer ${token}` } },
-  );
-  const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`Tinybird pipe ${endpointName}: ${res.status} ${text}`);
+
+  try {
+    console.log(`Tinybird MCP call_endpoint ${endpointName}`);
+    const { Client } = await import(
+      "@modelcontextprotocol/sdk/client/index.js"
+    );
+    const { StreamableHTTPClientTransport } = await import(
+      "@modelcontextprotocol/sdk/client/streamableHttp.js"
+    );
+    const url = new URL("https://mcp.tinybird.co");
+    url.searchParams.set("token", token);
+    url.searchParams.set("host", host);
+    const transport = new StreamableHTTPClientTransport(url);
+    const client = new Client({
+      name: "stale-flags-surgeon",
+      version: "0.1.0",
+    });
+    await client.connect(transport);
+    try {
+      const result = await client.callTool({
+        name: "call_endpoint",
+        arguments: {
+          endpoint_name: endpointName,
+          params,
+          response_format: "JSON",
+        },
+      });
+      const text = extractMcpText(result);
+      const parsed = JSON.parse(text) as { data?: T[] } | T[];
+      if (Array.isArray(parsed)) return parsed;
+      return parsed.data ?? [];
+    } finally {
+      await client.close().catch(() => undefined);
+    }
+  } catch (mcpErr) {
+    console.warn(
+      `Tinybird MCP failed (${mcpErr instanceof Error ? mcpErr.message : mcpErr}); falling back to REST`,
+    );
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
+    const res = await fetch(
+      `${host.replace(/\/$/, "")}/v0/pipes/${endpointName}.json?${qs}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const text = await res.text();
+    if (!res.ok) {
+      throw new Error(`Tinybird pipe ${endpointName}: ${res.status} ${text}`);
+    }
+    const json = JSON.parse(text) as { data?: T[] };
+    return json.data ?? [];
   }
-  const json = JSON.parse(text) as { data?: T[] };
-  return json.data ?? [];
 }
 
 /**
- * Live re-check against flag_safety_check before any edit.
+ * Live re-check against flag_safety_check before any edit (MCP-first).
  * Aborts if the plan/CLI payload is stale relative to Tinybird.
  */
 async function reverifyFlagSafety(payload: Payload): Promise<void> {
   assertFlagKey(payload.flag_key);
   console.log(
-    `Re-verifying ${payload.flag_key} via flag_safety_check?key=…`,
+    `Re-verifying ${payload.flag_key} via Tinybird MCP flag_safety_check?key=…`,
   );
   let rows: SafetyCheckRow[];
   try {

@@ -53,36 +53,22 @@ function useTinybird(): boolean {
   );
 }
 
-async function callTinybirdEndpoint<T>(
+function preferMcp(): boolean {
+  // Demo path: Tinybird MCP is the governed surface the article sells.
+  // REST remains a fallback when MCP is unreachable.
+  return (
+    process.env.SCOUT_SOURCE === "mcp" ||
+    process.env.SCOUT_MCP === "1" ||
+    process.env.SCOUT_MCP === "prefer"
+  );
+}
+
+async function callTinybirdViaMcp<T>(
   endpointName: string,
-  params: Record<string, string | number> = {},
+  params: Record<string, string | number>,
+  host: string,
+  token: string,
 ): Promise<T[]> {
-  const host =
-    process.env.TINYBIRD_API_HOST ?? "https://api.us-east.aws.tinybird.co";
-  const token = process.env.TINYBIRD_TOKEN ?? "";
-  if (!token) throw new Error("TINYBIRD_TOKEN is required for Tinybird mode");
-
-  // REST-first (deterministic scout in Fargate). Optional MCP if SCOUT_MCP=1.
-  const qs = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
-  try {
-    const res = await fetch(
-      `${host.replace(/\/$/, "")}/v0/pipes/${endpointName}.json?${qs}`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-    const text = await res.text();
-    if (!res.ok) {
-      throw new Error(`Tinybird pipe ${endpointName}: ${res.status} ${text}`);
-    }
-    const json = JSON.parse(text) as { data: T[] };
-    return json.data ?? [];
-  } catch (restErr) {
-    if (process.env.SCOUT_MCP !== "1") throw restErr;
-    console.warn(
-      `Tinybird REST failed (${restErr instanceof Error ? restErr.message : restErr}); trying MCP`,
-    );
-  }
-
   const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
   const { StreamableHTTPClientTransport } = await import(
     "@modelcontextprotocol/sdk/client/streamableHttp.js"
@@ -108,6 +94,57 @@ async function callTinybirdEndpoint<T>(
     return parsed.data ?? [];
   } finally {
     await client.close().catch(() => undefined);
+  }
+}
+
+async function callTinybirdViaRest<T>(
+  endpointName: string,
+  params: Record<string, string | number>,
+  host: string,
+  token: string,
+): Promise<T[]> {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
+  const res = await fetch(
+    `${host.replace(/\/$/, "")}/v0/pipes/${endpointName}.json?${qs}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Tinybird pipe ${endpointName}: ${res.status} ${text}`);
+  }
+  const json = JSON.parse(text) as { data: T[] };
+  return json.data ?? [];
+}
+
+async function callTinybirdEndpoint<T>(
+  endpointName: string,
+  params: Record<string, string | number> = {},
+): Promise<T[]> {
+  const host =
+    process.env.TINYBIRD_API_HOST ?? "https://api.us-east.aws.tinybird.co";
+  const token = process.env.TINYBIRD_TOKEN ?? "";
+  if (!token) throw new Error("TINYBIRD_TOKEN is required for Tinybird mode");
+
+  if (preferMcp()) {
+    try {
+      console.log(`Tinybird MCP call_endpoint ${endpointName}`);
+      return await callTinybirdViaMcp<T>(endpointName, params, host, token);
+    } catch (mcpErr) {
+      console.warn(
+        `Tinybird MCP failed (${mcpErr instanceof Error ? mcpErr.message : mcpErr}); falling back to REST`,
+      );
+      return callTinybirdViaRest<T>(endpointName, params, host, token);
+    }
+  }
+
+  try {
+    return await callTinybirdViaRest<T>(endpointName, params, host, token);
+  } catch (restErr) {
+    console.warn(
+      `Tinybird REST failed (${restErr instanceof Error ? restErr.message : restErr}); trying MCP`,
+    );
+    return callTinybirdViaMcp<T>(endpointName, params, host, token);
   }
 }
 
@@ -258,7 +295,7 @@ async function main(): Promise<void> {
   const tinybird = useTinybird() || argv.includes("--tinybird");
   const id = runId();
   console.log(
-    `Scout run_id=${id} dryRun=${dryRun || !full} source=${tinybird ? "tinybird-rest" : "local"} dispatch=${!noDispatch}\n`,
+    `Scout run_id=${id} dryRun=${dryRun || !full} source=${tinybird ? (preferMcp() ? "tinybird-mcp" : "tinybird-rest") : "local"} dispatch=${!noDispatch}\n`,
   );
 
   const localMeta = tinybird ? null : await loadFromLocal();

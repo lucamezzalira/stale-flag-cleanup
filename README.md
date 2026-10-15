@@ -168,7 +168,8 @@ sequenceDiagram
 1. **Featurevisor** holds flag definitions; datafiles ship to S3/CloudFront.
 2. **`apps/web` + `flag-client`** evaluate from that datafile.
 3. **`publish-defs` / seed** populate Tinybird definitions + activity.
-4. **Tinybird** pipes are the only eligibility API. Scout is REST-first.
+4. **Tinybird** pipes are the only eligibility API. Scout and surgeon re-verify call them
+   through **Tinybird MCP** on the Fargate path (`SCOUT_SOURCE=mcp`); REST is the fallback.
 5. **Scout** plans independently `safe_to_remove` flags (`collapse_direction != none`) into S3 `plan.json`. It does not invent nest deletes for parent-gated inconclusive children.
 6. **Surgeon** applies the whole plan in one Fargate session, then opens **one** PR only if every flag passes gates.
 7. **Humans** merge. Publish syncs CDN. QA: `docs/qa-agent.md`.
@@ -224,7 +225,7 @@ pnpm datafile:serve   # terminal 1
 pnpm seed             # terminal 2 — 90-day synthetic history
 pnpm publish-defs
 pnpm report
-SCOUT_SOURCE=tinybird pnpm agent:scout -- --dry-run
+SCOUT_SOURCE=mcp pnpm agent:scout -- --dry-run
 ```
 
 You should see `loyalty_stamp_banner` and `express_pay_hint` as `safe_to_remove` (and any other independently safe leaves), plus refusals for wishlist / shipping / search / checkout_redesign.
@@ -249,7 +250,9 @@ Set GitHub secret `AWS_GHA_PUBLISH_ROLE_ARN` to stack output `GitHubPublishRoleA
 
 ## MCP (Tinybird)
 
-Scope a token to the three endpoints and add Tinybird MCP in the editor. Scout on Fargate uses the same `call_endpoint` path when `TINYBIRD_TOKEN` is present.
+Scope a token to the three endpoints and add Tinybird MCP in the editor. That is the same
+hosted MCP the Fargate scout uses (`call_endpoint`) and the surgeon uses to re-verify
+`flag_safety_check` before each edit.
 
 ## Environment variables
 
@@ -268,7 +271,7 @@ See `.env.example`. Important ones:
 ## Agent commands
 
 ```bash
-SCOUT_SOURCE=tinybird pnpm agent:scout -- --dry-run
+SCOUT_SOURCE=mcp pnpm agent:scout -- --dry-run
 pnpm agent:run
 pnpm agent:surgeon -- --flag=promo_banner_2025 --dry-run
 pnpm demo:reset
