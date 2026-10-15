@@ -32,8 +32,8 @@ Order in `flag_safety_check` / `cleanup_report` `multiIf` (and `packages/verdict
 2. Parent-gated, zero evaluations → `inconclusive`
 3. Living descendants → `blocked`
 4. No single `target_value` (mid-ramp / multi-variation) → `blocked`
-5. Live minority builds (`evaluating_share` &lt; 0.5) → `blocked` (reason mentions deprecation when set)
-6. Thin evidence / first seen inside window → `inconclusive`
+5. Thin evidence / first seen inside window → `inconclusive`
+6. Live minority builds (`evaluating_share` &lt; 0.5) → `blocked` (reason mentions deprecation when set)
 7. Deprecated or archived (after evidence passed) → `safe_to_remove`, route `lifecycle`
 8. Zero evaluations → `safe_to_remove`, route `abandoned`
 9. Settled (single variation, rollout 0/100, enough events, share ≥ 0.5) → `safe_to_remove`, route `settled`

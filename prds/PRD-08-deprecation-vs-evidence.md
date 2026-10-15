@@ -24,8 +24,8 @@ Verdict / route / reason order:
 2. Parent-gated, zero evaluations → `inconclusive`
 3. Living descendants → `blocked`
 4. No single `target_value` → `blocked`
-5. Live minority (`evaluating_share` < 0.5) → `blocked` (deprecation-aware reason)
-6. Thin evidence / first seen inside window → `inconclusive`
+5. Thin evidence / first seen inside window → `inconclusive`
+6. Live minority (`evaluating_share` < 0.5) → `blocked` (deprecation-aware reason)
 7. Deprecated or archived → `safe_to_remove`, route `lifecycle`
 8. Zero evaluations → `safe_to_remove`, route `abandoned`
 9. Settled → `safe_to_remove`, route `settled`

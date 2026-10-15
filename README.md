@@ -194,8 +194,8 @@ sequenceDiagram
 2. **`apps/web` + `flag-client`** evaluate from that datafile.
 3. **`publish-defs` / seed** populate Tinybird definitions + activity.
 4. **Tinybird** pipes are the only eligibility API. Scout and surgeon harness call them over **REST**. The surgeon evidence model (and humans) use **Tinybird MCP**.
-   Verdict order (PRD-08): structural checks → live minority / thin evidence → **then**
-   lifecycle (`deprecated` / `archived`) → abandoned / settled. Deprecation is a request;
+   Verdict order (PRD-08): structural checks → thin evidence / first-seen → live minority →
+   **then** lifecycle (`deprecated` / `archived`) → abandoned / settled. Deprecation is a request;
    evidence is the permission. `evaluating_share` is a fraction in `[0, 1]` (latest adoption
    snapshot per evaluating build). Pitfalls: lifecycle used to sit above evidence checks;
    PR #11's narrative misreported a summed metric as a percentage.

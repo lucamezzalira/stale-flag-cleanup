@@ -361,31 +361,8 @@ export function runSafetyCheck(
     (def.rollout_percentage === 0 || def.rollout_percentage === 100) &&
     win.evaluatingShare >= 0.5;
 
-  // Evidence before lifecycle: deprecation is a request, not permission.
-  if (
-    win.evaluatedCount > 0 &&
-    win.liveHits.length > 0 &&
-    win.evaluatingShare < 0.5
-  ) {
-    const hit = [...win.liveHits].sort(
-      (a, b) => b.session_share - a.session_share,
-    )[0]!;
-    const pct = formatEvaluatingSharePct(win.evaluatingShare);
-    const share = win.evaluatingShare.toFixed(3);
-    const reason =
-      def.deprecated === 1 || def.archived === 1
-        ? `Featurevisor marks ${params.flag_key} as ${def.deprecated ? "deprecated" : "archived"}, but builds serving ${pct} of current sessions still evaluate it. Deprecation makes a flag a candidate; the evidence does not yet permit removal.`
-        : `Flag ${params.flag_key} is still evaluated by builds serving ${pct} of current sessions (build ${hit.build_id}, released ${hit.released_at}, evaluating_share=${share}).`;
-    return buildVerdict(
-      params.flag_key,
-      def,
-      "blocked",
-      "abandoned",
-      reason,
-      baseEvidence,
-    );
-  }
-
+  // Thin evidence before minority: sparse traffic is inconclusive even if a
+  // live cohort is still reading the flag.
   if (win.totalEvents > 0 && win.totalEvents < cfg.min_events_floor) {
     return buildVerdict(
       params.flag_key,
@@ -418,6 +395,31 @@ export function runSafetyCheck(
       "inconclusive",
       "abandoned",
       `Flag ${params.flag_key} has only ${win.evaluatedCount} evaluated events in the ${cfg.window_days}-day window, which is too thin to support a removal decision.`,
+      baseEvidence,
+    );
+  }
+
+  // Evidence before lifecycle: deprecation is a request, not permission.
+  if (
+    win.evaluatedCount > 0 &&
+    win.liveHits.length > 0 &&
+    win.evaluatingShare < 0.5
+  ) {
+    const hit = [...win.liveHits].sort(
+      (a, b) => b.session_share - a.session_share,
+    )[0]!;
+    const pct = formatEvaluatingSharePct(win.evaluatingShare);
+    const share = win.evaluatingShare.toFixed(3);
+    const reason =
+      def.deprecated === 1 || def.archived === 1
+        ? `Featurevisor marks ${params.flag_key} as ${def.deprecated ? "deprecated" : "archived"}, but builds serving ${pct} of current sessions still evaluate it. Deprecation makes a flag a candidate; the evidence does not yet permit removal.`
+        : `Flag ${params.flag_key} is still evaluated by builds serving ${pct} of current sessions (build ${hit.build_id}, released ${hit.released_at}, evaluating_share=${share}).`;
+    return buildVerdict(
+      params.flag_key,
+      def,
+      "blocked",
+      "abandoned",
+      reason,
       baseEvidence,
     );
   }

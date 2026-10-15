@@ -4,7 +4,7 @@ Skip shot 1 (architecture; user has it).
 
 | # | File | What |
 |---|---|---|
-| 2 | `02-scout-dry-run.png` + `02-scout-dry-run.txt` | Scout dry-run `source=tinybird-rest`, all verdicts including `nav_winter_ribbon` blocked |
+| 2 | `02-scout-dry-run.png` + `02-scout-dry-run.txt` | Scout dry-run `source=tinybird-rest`: `search_ranking_v2` inconclusive (thin), `nav_winter_ribbon` + `checkout_redesign` blocked (minority) |
 | 3 | `03-pr14-body.png` + `03-pr14-body.md` | PR #14 Decision (abandoned+settled) + evidence with 97.8% share + MCP footer |
 | 4 | `04-pr14-diffs-side-by-side.png` | PR #14 diffs: `listing_outlet_banner` delete_gated vs `checkout_secure_seal` keep_gated |
 | 5a | `05a-listing-before-outlet.png` | Listing before (outlet callout present, winter still live) |

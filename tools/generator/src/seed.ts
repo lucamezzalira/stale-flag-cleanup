@@ -98,10 +98,10 @@ async function main(): Promise<void> {
 
   console.log(`Seeding ${days} days with seed=${seed}…`);
 
-  // Weekly builds; one sticky old build ~90d ago retaining 2–4% share
+  // Weekly builds; one sticky old build before the window retaining 2–4% share
   const builds: Array<{ id: string; released: Date }> = [];
   const stickyReleased = new Date(now);
-  stickyReleased.setUTCDate(stickyReleased.getUTCDate() - Math.min(days, 90) + 5);
+  stickyReleased.setUTCDate(stickyReleased.getUTCDate() - Math.min(days, 90) - 15);
   const stickyId = `${dayString(stickyReleased)}.oldcafe1`;
   builds.push({ id: stickyId, released: stickyReleased });
 
@@ -277,23 +277,19 @@ async function main(): Promise<void> {
     }
   }
 
-  // listing_outlet_banner: activity ending before window (abandoned evidence-only)
+  // Pre-window activity so first_seen does not sit inside the quiet window and
+  // preempt live-minority / abandoned / settled rules after the reorder.
   for (let offset = days + 40; offset > days + 5; offset--) {
     const day = new Date(now);
     day.setUTCDate(day.getUTCDate() - offset);
     const ds = dayString(day);
     const b = builds[0]!;
     bump(ds, "listing_outlet_banner", b.id, "evaluated", "false", 50);
-  }
-
-  // checkout_secure_seal: also appear before the window so first_seen is not inside it
-  for (let offset = days + 40; offset > days + 5; offset--) {
-    const day = new Date(now);
-    day.setUTCDate(day.getUTCDate() - offset);
-    const ds = dayString(day);
-    const modern = builds.filter((b) => b.id !== stickyId);
-    const b = modern[0] ?? builds[0]!;
-    bump(ds, "checkout_secure_seal", b.id, "evaluated", "true", 80);
+    bump(ds, "checkout_redesign", stickyId, "evaluated", "true", 40);
+    bump(ds, "nav_winter_ribbon", stickyId, "evaluated", "true", 40);
+    const modern = builds.filter((x) => x.id !== stickyId);
+    const m = modern[0] ?? builds[0]!;
+    bump(ds, "checkout_secure_seal", m.id, "evaluated", "true", 80);
   }
 
   // search_ranking_v2: 5–15 evaluated across whole window

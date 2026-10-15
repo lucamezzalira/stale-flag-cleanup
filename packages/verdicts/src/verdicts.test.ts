@@ -444,13 +444,15 @@ describe("runSafetyCheck", () => {
     assert.match(redesign.reason, /b-sticky/);
   });
 
-  it("returns inconclusive for thin evidence", () => {
+  it("returns inconclusive for thin evidence before minority blocking", () => {
     const store = baseStore();
+    // 8 evaluated events on a live build → thin evidence wins over share < 0.5
     const sparse = runSafetyCheck(store, {
       flag_key: "search_ranking_v2",
       now,
     });
     assert.equal(sparse.verdict, "inconclusive");
+    assert.match(sparse.reason, /only 8/);
   });
 
   it("returns inconclusive when firstSeen is inside the window", () => {
