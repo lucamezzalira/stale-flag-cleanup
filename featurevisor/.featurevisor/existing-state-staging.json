@@ -97,6 +97,15 @@
         }
       ],
       "hash": "Uu3I8IBZOF"
+    },
+    "loyalty_stamp_banner": {
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 0
+        }
+      ],
+      "hash": "Whqth7j0rI"
     }
   }
 }

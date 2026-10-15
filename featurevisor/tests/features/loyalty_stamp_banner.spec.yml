@@ -1,6 +1,0 @@
-feature: loyalty_stamp_banner
-assertions:
-  - description: production everyone off (delete_gated target)
-    environment: production
-    at: 50
-    expectedToBeEnabled: false

@@ -4,7 +4,6 @@ import { useFlag } from "../flags";
 export function CheckoutPage() {
   const redesign = useFlag("checkout_redesign");
   const shipping = useFlag("shipping_estimator");
-  const expressHint = useFlag("express_pay_hint");
 
   return (
     <div>
@@ -38,18 +37,9 @@ export function CheckoutPage() {
               <button type="button" className="btn">
                 One-click buy
               </button>
-              {expressHint.enabled ? (
-                <p className="muted" style={{ marginTop: "0.5rem" }}>
-                  Express pay hint: skip the address book (express_pay_hint).
-                </p>
-              ) : null}
-              <FlagCallout
-                flagKey="express_pay_hint"
-                enabled={expressHint.enabled}
-                variation={expressHint.variation}
-                outcome={expressHint.outcome}
-                blockedBy={expressHint.blockedBy}
-              />
+              <p className="muted" style={{ marginTop: "0.5rem" }}>
+                Express pay hint: skip the address book.
+              </p>
             </div>
           </section>
 

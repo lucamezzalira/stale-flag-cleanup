@@ -1,6 +1,3 @@
-import { FlagCallout } from "../FlagCallout";
-import { useFlag } from "../flags";
-
 const PRODUCTS = [
   { name: "Classic Tee", price: "$28", code: "TEE-01" },
   { name: "Canvas Tote", price: "$42", code: "TOT-02" },
@@ -11,8 +8,6 @@ const PRODUCTS = [
 ];
 
 export function ListingPage() {
-  const loyalty = useFlag("loyalty_stamp_banner");
-
   return (
     <div>
       <div className="page-head">
@@ -21,24 +16,6 @@ export function ListingPage() {
           <p>Catalog surface used to exercise abandoned promo traffic.</p>
         </div>
       </div>
-
-      {/* delete_gated fixture is 0% in Featurevisor; render gated copy once the
-          SDK is ready so BEFORE CDN QA can see the string. Surgeon removes this. */}
-      {loyalty.ready ? (
-        <div className="panel" style={{ marginTop: "1rem" }}>
-          <strong>Loyalty stamp card</strong>
-          <p className="muted">
-            Collect stamps on every order this season (loyalty_stamp_banner).
-          </p>
-          <FlagCallout
-            flagKey="loyalty_stamp_banner"
-            enabled={loyalty.enabled}
-            variation={loyalty.variation}
-            outcome={loyalty.outcome}
-            blockedBy={loyalty.blockedBy}
-          />
-        </div>
-      ) : null}
 
       <div className="grid" style={{ marginTop: "1rem" }}>
         {PRODUCTS.map((p) => (
