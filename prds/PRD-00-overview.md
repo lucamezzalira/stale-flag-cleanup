@@ -42,13 +42,14 @@ Both routes feed the same safety check and produce the same verdicts.
 
 ## The eight demo flags
 
-The synthetic dataset must produce all of the following outcomes on every run. These flag
-keys are referenced by every other PRD.
+The synthetic dataset must produce all of the following outcomes on every run when the
+Featurevisor fixtures for the two safes are present. These flag keys are referenced by
+every other PRD.
 
 | Flag key | Rollout | Route | Expected verdict | Why |
 |---|---|---|---|---|
-| `promo_banner_2025` | 0% | abandoned | `safe_to_remove` | No evaluations of any kind in the window, last seen well before it. Collapses by deleting the gated branch |
-| `one_click_buy` | 100% | settled | `safe_to_remove` | Heavy daily traffic, every evaluation in the window returned the same value, rollout stable for months. Collapses by keeping the gated branch |
+| `loyalty_stamp_banner` | 0% | lifecycle / abandoned | `safe_to_remove` | Deprecated, quiet in the window (or activity only before it). Collapses by deleting the gated branch |
+| `express_pay_hint` | 100% | lifecycle / settled | `safe_to_remove` | Deprecated, heavy traffic all returning the same value. Collapses by keeping the gated branch |
 | `checkout_redesign` | 100% | abandoned | `blocked` | Zero evaluations from any current build, but still evaluated several hundred times a day by an older build that retains a small share of live sessions |
 | `shipping_estimator` | 60% | settled | `blocked` | Partial rollout abandoned mid-ramp. Traffic is split across two variations, so there is no single value to collapse to |
 | `wishlist` | 0% | abandoned | `blocked` | Has living descendants that have not been removed yet |
@@ -56,10 +57,11 @@ keys are referenced by every other PRD.
 | `wishlist_sharing_qr` | 100% | abandoned | `inconclusive` | Same as above, one level deeper |
 | `search_ranking_v2` | 5% | abandoned | `inconclusive` | Sparse traffic, a handful of evaluations across the whole window, not enough evidence either way |
 
-`promo_banner_2025` and `one_click_buy` are the only flags the agent is allowed to remove,
-and they collapse in opposite directions. Having both is the point: it proves the agent is
-acting on the live rollout state rather than assuming a flag removal means deleting the
-gated code.
+The agent may remove **any** independently `safe_to_remove` flag with
+`collapse_direction != none`. There is no hardcoded allowlist of two keys. The pair above
+(and historically `promo_banner_2025` / `one_click_buy` in early PRs) exists so delete vs
+keep collapse both appear in one plan. After a successful cleanup those YAML keys leave
+the project until restored for a re-demo.
 
 ## Why the nested case matters
 
@@ -181,10 +183,10 @@ dataset. It records what the evidence said at the moment a decision was taken.
 /tools/generator        Synthetic data generator and seeding
 /tools/report           Local CLI report for humans without an MCP client
 /tools/reset            Demo reset script
-/agent/scout            Decides which flags are candidates and what the verdict is
-/agent/surgeon          Edits the repo and opens the pull request
-/infra                  CDK for AgentCore, EventBridge, Secrets Manager
-/docs                   These PRDs
+/agent/scout            Deterministic planner; REST-first Tinybird; writes S3 plan.json
+/agent/surgeon          Bedrock-backed editor; one session per plan; one multi-flag PR
+/infra                  CDK: EventBridge Scheduler, Step Functions, ECS Fargate (scout + surgeon images), Secrets Manager, S3/CloudFront
+/docs                   These PRDs plus qa-agent playbook
 README.md               Quickstart: clone, seed, run, see a refusal
 ```
 
@@ -201,8 +203,9 @@ TypeScript throughout. pnpm workspace. Public GitHub repository.
 - The verdict is computed in SQL inside the Tinybird endpoint. No component outside
   Tinybird is permitted to decide whether a flag is safe to remove, or what value it
   collapses to.
-- AgentCore Gateway is not used in front of Tinybird. The agent calls Tinybird's own
-  hosted MCP server, and the scout calls the REST endpoints directly.
+- Scout does not invent safety (no scheduling parent-gated inconclusive children to unlock
+  a parent). Merge gate is a human on GitHub. No SNS merge-gate topic. No auto-merge.
+- AgentCore is out of scope for this PoC host. The agent runs on ECS Fargate.
 
 ## Verify before implementing
 
@@ -212,8 +215,8 @@ the current format and CLI commands against the official documentation at docs.t
 and follow that over anything written here. The schemas and the verdict logic in these PRDs
 are the requirement. The exact file syntax is not.
 
-The same applies to Featurevisor and to AgentCore: check the current docs for SDK and API
-shapes before coding against them.
+The same applies to Featurevisor and to the AWS services in `/infra`: check current docs
+for SDK and API shapes before coding against them.
 
 ## Build order
 
