@@ -64,6 +64,53 @@ function diff(
   return out;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Wait for Events API → MV to match local TS verdicts (handles ingest lag). */
+async function waitForPipeSettle(
+  host: string,
+  token: string,
+  keys: string[],
+  tsByKey: Map<string, SafetyCheckResult>,
+): Promise<void> {
+  const maxAttempts = 24;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const reportPipe = await callPipe(host, token, "cleanup_report");
+    const reportByKey = new Map(reportPipe.map((r) => [r.flag_key, r]));
+    let ok = true;
+    for (const key of keys) {
+      const pipe = reportByKey.get(key);
+      const ts = tsByKey.get(key);
+      if (!pipe || !ts) {
+        ok = false;
+        break;
+      }
+      if (
+        pipe.verdict !== ts.verdict ||
+        pipe.route !== ts.route ||
+        pipe.collapse_direction !== ts.collapse_direction ||
+        pipe.reason !== ts.reason
+      ) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) {
+      console.log(`Tinybird settled after ${attempt} attempt(s)`);
+      return;
+    }
+    console.log(
+      `Waiting for Tinybird MV settle (${attempt}/${maxAttempts})…`,
+    );
+    await sleep(5000);
+  }
+  throw new Error(
+    "Tinybird cleanup_report did not match local verdicts within settle window (concurrent seed or MV lag)",
+  );
+}
+
 async function main(): Promise<void> {
   await loadDotEnvOnce();
   const host =
@@ -83,10 +130,13 @@ async function main(): Promise<void> {
     );
   }
 
-  const reportPipe = await callPipe(host, token, "cleanup_report");
-  const reportByKey = new Map(reportPipe.map((r) => [r.flag_key, r]));
   const tsReport = cleanupReport(store);
   const tsByKey = new Map(tsReport.map((r) => [r.flag_key, r]));
+
+  await waitForPipeSettle(host, token, keys, tsByKey);
+
+  const reportPipe = await callPipe(host, token, "cleanup_report");
+  const reportByKey = new Map(reportPipe.map((r) => [r.flag_key, r]));
 
   const mismatches: string[] = [];
 
@@ -101,8 +151,8 @@ async function main(): Promise<void> {
     }
     const ts = runSafetyCheck(store, { flag_key: key }) as SafetyCheckResult;
     mismatches.push(
-      ...diff(`${key}/safety`, fields(safety), fields(ts)).map(
-        (m) => m.replace("pipe/ts", "safety_pipe vs runSafetyCheck"),
+      ...diff(`${key}/safety`, fields(safety), fields(ts)).map((m) =>
+        m.replace("pipe/ts", "safety_pipe vs runSafetyCheck"),
       ),
     );
 
@@ -122,7 +172,6 @@ async function main(): Promise<void> {
       ),
     );
 
-    // safety pipe and cleanup_report should agree on the cascade fields
     mismatches.push(
       ...diff(`${key}/pipe-pair`, fields(safety), fields(report)).map((m) =>
         m.replace("pipe/ts", "flag_safety_check vs cleanup_report"),

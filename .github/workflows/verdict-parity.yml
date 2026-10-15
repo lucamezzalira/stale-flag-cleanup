@@ -9,6 +9,11 @@ on:
       - "tools/generator/**"
       - ".github/workflows/verdict-parity.yml"
 
+# One workspace: concurrent seeds double-count via the MV.
+concurrency:
+  group: tinybird-verdict-parity
+  cancel-in-progress: true
+
 jobs:
   parity:
     runs-on: ubuntu-latest
@@ -24,7 +29,7 @@ jobs:
       - name: Build packages
         run: pnpm --filter "./packages/**" run build
       - name: Seed + parity
-        timeout-minutes: 20
+        timeout-minutes: 25
         env:
           TINYBIRD_API_HOST: ${{ secrets.TINYBIRD_API_HOST }}
           TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_TOKEN }}
@@ -42,6 +47,4 @@ jobs:
             exit 0
           fi
           pnpm seed
-          # Events API → MV lag
-          sleep 20
           pnpm --filter @stale-flags/verdict-parity start
