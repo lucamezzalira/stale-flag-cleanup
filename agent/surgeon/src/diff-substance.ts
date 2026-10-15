@@ -8,20 +8,52 @@ export function isMetadataOnlyPath(rel: string): boolean {
   return false;
 }
 
+function normalize(rel: string): string {
+  return rel.replace(/\\/g, "/");
+}
+
+/** True if unified diff shows a change under apps/ or packages/ that mentions the flag. */
+export function flagTouchedInAppDiff(
+  flagKey: string,
+  unifiedDiff: string,
+): boolean {
+  if (!unifiedDiff) return false;
+  const lines = unifiedDiff.split("\n");
+  let inAppOrPkg = false;
+  for (const line of lines) {
+    const fileHit = /^diff --git a\/(.+?) b\//.exec(line);
+    if (fileHit) {
+      const path = normalize(fileHit[1]!);
+      inAppOrPkg =
+        (path.startsWith("apps/") || path.startsWith("packages/")) &&
+        !isMetadataOnlyPath(path);
+      continue;
+    }
+    if (!inAppOrPkg) continue;
+    // Content change (not a hunk header) that names this flag.
+    if (
+      (line.startsWith("+") || line.startsWith("-")) &&
+      !line.startsWith("+++") &&
+      !line.startsWith("---") &&
+      line.includes(flagKey)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
- * Sixth gate: every flag must delete its Featurevisor YAML and the batch must
- * touch apps/ or packages/. REVISION / existing-state alone never pass.
+ * Sixth gate: every flag must delete its Featurevisor YAML and must have an
+ * apps/ or packages/ change that names that flag (not a batch-level proxy).
+ * REVISION / existing-state alone never pass.
  */
 export function checkDiffSubstance(
   flagKeys: string[],
   dirtyPaths: string[],
+  unifiedDiff = "",
 ): { ok: true } | { ok: false; flag: string; detail: string } {
-  const paths = dirtyPaths.map((p) => p.replace(/\\/g, "/"));
-  const hasAppOrPkg = paths.some(
-    (p) =>
-      !isMetadataOnlyPath(p) &&
-      (p.startsWith("apps/") || p.startsWith("packages/")),
-  );
+  const paths = dirtyPaths.map(normalize);
 
   for (const key of flagKeys) {
     const yml = `featurevisor/features/${key}.yml`;
@@ -32,12 +64,20 @@ export function checkDiffSubstance(
         detail: `missing deletion of ${yml}`,
       };
     }
-    if (!hasAppOrPkg) {
+
+    const pathMentionsFlag = paths.some(
+      (p) =>
+        !isMetadataOnlyPath(p) &&
+        (p.startsWith("apps/") || p.startsWith("packages/")) &&
+        p.includes(key),
+    );
+    const diffMentionsFlag = flagTouchedInAppDiff(key, unifiedDiff);
+    if (!pathMentionsFlag && !diffMentionsFlag) {
       return {
         ok: false,
         flag: key,
         detail:
-          "no apps/ or packages/ change (REVISION / existing-state alone are insufficient)",
+          `no apps/ or packages/ change naming ${key} (batch-level apps edits for other flags, or REVISION-only, are insufficient)`,
       };
     }
   }

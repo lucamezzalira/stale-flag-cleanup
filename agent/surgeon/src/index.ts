@@ -268,6 +268,23 @@ function listDirtyPaths(): string[] {
   return [...new Set(lines)];
 }
 
+/** Unstaged + untracked unified diff for per-flag substance checks. */
+function listUnifiedDiff(): string {
+  const tracked = runCaptured("git", ["diff", "--"]);
+  const untracked = runCaptured("git", [
+    "ls-files",
+    "--others",
+    "--exclude-standard",
+  ]);
+  const parts = [tracked.log];
+  for (const rel of untracked.log.split("\n").map((s) => s.trim()).filter(Boolean)) {
+    const show = runCaptured("git", ["diff", "--no-index", "/dev/null", rel]);
+    // git diff --no-index exits 1 when files differ; log still holds the patch.
+    parts.push(show.log);
+  }
+  return parts.join("\n");
+}
+
 async function recordDiffSubstanceFailure(
   payloads: Payload[],
   failingFlag: string,
@@ -1248,6 +1265,7 @@ async function runPlanMode(plan: PlanFile): Promise<void> {
     const substance = checkDiffSubstance(
       payloads.map((p) => p.flag_key),
       dirty,
+      listUnifiedDiff(),
     );
     if (!substance.ok) {
       await recordDiffSubstanceFailure(
@@ -1435,7 +1453,11 @@ async function runSingleFlagMode(): Promise<void> {
       rewind();
       throw new Error("No staged changes after successful gates");
     }
-    const substance = checkDiffSubstance([payload.flag_key], dirty);
+    const substance = checkDiffSubstance(
+      [payload.flag_key],
+      dirty,
+      listUnifiedDiff(),
+    );
     if (!substance.ok) {
       await recordDiffSubstanceFailure(
         [payload],

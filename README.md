@@ -218,12 +218,12 @@ sequenceDiagram
 | Model | n/a | Sonnet 4.5 Converse (edit without tools; evidence with MCP tools) |
 | QA | Ad hoc | Production-bar playbook + new-flag E2E |
 
-Refusals stay. Safe removals are whatever Tinybird marks safe. Current fixtures (PRD-08):
-`listing_outlet_banner` (abandoned / delete_gated), `checkout_secure_seal` (settled /
-keep_gated), `nav_winter_ribbon` (deprecated but live minority → **blocked**). Earlier
-pairs: `catalog_clearance_rail` / `checkout_trust_badges` (#12), `size_guide_panel` /
-`search_typo_suggest` (#11), `loyalty_stamp_banner` / `express_pay_hint` (#9),
-`promo_banner_2025` / `one_click_buy` (#5/#6).
+Refusals stay. Safe removals are whatever Tinybird marks safe. Current seed (no
+`safe_to_remove` fixtures): `wishlist` (+ children, descendants / parent-gated),
+`shipping_estimator` (mid-ramp), `search_ranking_v2` (thin), `checkout_redesign` and
+`nav_winter_ribbon` (live minority; ribbon is also deprecated). Earlier removed pairs:
+`listing_outlet_banner` / `checkout_secure_seal` (#14), `catalog_clearance_rail` /
+`checkout_trust_badges` (#12), `promo_banner_2025` / `one_click_buy` (#5/#6).
 
 ### Parts in this repo
 
@@ -243,7 +243,7 @@ pairs: `catalog_clearance_rail` / `checkout_trust_badges` (#12), `size_guide_pan
 | `docs/handoff-mcp-for-claude.md` | Protocol handoff for article / Claude |
 | `tools/reset` | Reset `demo`, truncate Tinybird, reseed |
 | `infra/` | CDK stack (web, datafiles, SFN + Fargate, scheduler, OIDC role) |
-| `.github/workflows/publish-flags.yml` | Push to `main`/`demo` → S3 + CloudFront |
+| `.github/workflows/publish-flags.yml` | Push to `demo` only → S3 + CloudFront |
 | `docs/qa-agent.md` | Manual QA agent playbook |
 
 ## Run it yourself
@@ -330,9 +330,10 @@ pnpm seed
 SCOUT_SOURCE=tinybird pnpm agent:scout -- --dry-run
 ```
 
-You should see `source=tinybird-rest` and a verdict matrix (refusals for wishlist / shipping /
-`search_ranking_v2` / `checkout_redesign` / `nav_winter_ribbon`, plus any current
-`safe_to_remove` fixtures). Tokens come from `.env` (scout loads it). If a pipe looks empty
+You should see `source=tinybird-rest` and a refusal matrix matching the seed: `wishlist`
+(+ children), `shipping_estimator`, `search_ranking_v2`, `checkout_redesign`,
+`nav_winter_ribbon`. Proposed surgeon actions stay empty until you add a
+`safe_to_remove` fixture. Tokens come from `.env` (scout loads it). If a pipe looks empty
 right after seed, wait a few seconds and re-run scout (Events API ingest lag). To run the
 full Fargate loop:
 

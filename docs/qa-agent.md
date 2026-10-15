@@ -6,20 +6,23 @@ Production-bar playbook. After every `pnpm infra:agent-run`, write a canvas at:
 
 Do **not** merge PRs yourself. Do **not** treat REVISION-only diffs as success.
 
-## E2E fixtures (must not hardcode the classic pair)
+## E2E fixtures (must not hardcode a classic pair)
 
-Current safe fixtures for a green demo:
+Current seed has **no** `safe_to_remove` flags. Scout should propose nothing. Expected
+refusals:
 
-| Flag | Collapse / verdict | BEFORE UI | AFTER UI |
-|---|---|---|---|
-| `listing_outlet_banner` | abandoned / `delete_gated_branch` | Listing outlet (off at 0%) | Flag + panel plumbing **gone** |
-| `checkout_secure_seal` | settled / `keep_gated_branch` | Checkout secure seal | Seal text **kept**, flag plumbing **gone** |
-| `nav_winter_ribbon` | **blocked** (deprecated + live minority) | Listing winter ribbon | **Still present** (must not be in PR) |
+| Flag | Verdict / route | Why |
+|---|---|---|
+| `wishlist` | blocked / abandoned | Living descendants |
+| `wishlist_sharing` | inconclusive / abandoned | Parent-gated |
+| `wishlist_sharing_qr` | inconclusive / abandoned | Parent-gated |
+| `shipping_estimator` | blocked / settled | Mid-ramp, no target |
+| `search_ranking_v2` | inconclusive / abandoned | Thin evidence |
+| `checkout_redesign` | blocked / abandoned | Live minority |
+| `nav_winter_ribbon` | blocked / abandoned | Deprecated + live minority |
 
-Refusals (still present, no PR): `wishlist` (+ children), `checkout_redesign`, `shipping_estimator`, `search_ranking_v2`, `nav_winter_ribbon`.
-
-Assert by **key lists from scout `plan.json`**. PRD-08: deprecation does not override live
-minority evidence.
+When you add a new safe fixture pair, assert by **key lists from scout `plan.json`**, not
+hardcoded names. PRD-08: deprecation does not override live minority evidence.
 
 Web URL: stack `WebUrl` (`https://dj37uarwx2jpn.cloudfront.net`).
 Datafile: `https://d1jcup3snfgsrs.cloudfront.net/featurevisor/production/featurevisor-all.json`.
@@ -47,7 +50,8 @@ aws s3 cp "s3://$BUCKET/$EXEC_NAME/plan.json" - | jq '{run_id, branch_name, cand
 aws s3 cp "s3://$BUCKET/$EXEC_NAME/surgeon-result.json" - | jq .
 ```
 
-Pass: SUCCEEDED; plan lists the **new** safe keys; surgeon-result `ok:true` with one `pr_url`.
+Pass: SUCCEEDED (or NothingToDo when the seed has no safe keys); plan matches scout;
+surgeon-result `ok:true` with one `pr_url` only when candidates were non-empty.
 
 ## Phase 2. Tinybird
 
@@ -59,7 +63,7 @@ curl -sS -H "Authorization: Bearer $TINYBIRD_TOKEN" \
 
 ## Phase 3. GitHub (merge gate)
 
-Expect **one** PR into `demo` with YAML deletes + app diffs for every planned key.
+Expect **one** PR into `demo` with YAML deletes + per-flag app diffs for every planned key.
 
 ```bash
 gh pr view <N> --json files,url,baseRefName
@@ -70,7 +74,7 @@ gh pr diff <N> --name-only
 
 ## Phase 4. Post-merge
 
-Publish (GHA or `pnpm infra:sync`). Record invalidation IDs. Hard-refresh shop + fetch datafile JSON. Confirm keys absent and UI collapses. Wishlist still refused.
+Publish (GHA on `demo`, or `pnpm infra:sync`). Record invalidation IDs. Hard-refresh shop + fetch datafile JSON. Confirm keys absent and UI collapses. Wishlist still refused.
 
 ## Expected observability logs (PRD-07)
 
@@ -92,7 +96,7 @@ PR body must contain **Decision (harness)** from REST re-verify, plus **Evidence
 
 | Symptom | Check |
 |---|---|
-| NothingToDo | `last_pr_url` poison; truncate decision log |
+| NothingToDo | Empty plan (current seed) or `last_pr_url` poison; truncate decision log |
 | REVISION-only PR | Already-removed flags; restore YAML/UI first |
 | SurgeonFailed mid-plan | No remote push (all-or-nothing); ECS surgeon logs |
 | CDN false green | Assert datafile JSON keys, not UI alone |
