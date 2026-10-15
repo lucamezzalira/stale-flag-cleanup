@@ -11,7 +11,6 @@ const PRODUCTS = [
 ];
 
 export function ListingPage() {
-  const outlet = useFlag("listing_outlet_banner");
   const winter = useFlag("nav_winter_ribbon");
 
   return (
@@ -22,22 +21,6 @@ export function ListingPage() {
           <p>Catalog surface used to exercise abandoned promo traffic.</p>
         </div>
       </div>
-
-      {outlet.enabled ? (
-        <section className="panel" style={{ marginBottom: "1rem" }}>
-          <h2>Outlet picks</h2>
-          <p className="muted">
-            End-of-season outlet rail. Evidence-only abandoned fixture.
-          </p>
-        </section>
-      ) : null}
-      <FlagCallout
-        flagKey="listing_outlet_banner"
-        enabled={outlet.enabled}
-        variation={outlet.variation}
-        outcome={outlet.outcome}
-        blockedBy={outlet.blockedBy}
-      />
 
       {winter.enabled ? (
         <div className="banner" style={{ marginBottom: "1rem" }}>

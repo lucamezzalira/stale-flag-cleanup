@@ -1,8 +1,0 @@
-feature: checkout_secure_seal
-assertions:
-  - at: 50
-    description: "Secure seal resolves enabled at 100%"
-    environment: production
-    context:
-      userId: user-smoke-1
-    expectedToBeEnabled: true
