@@ -19,3 +19,5 @@ Skip shot 1 (architecture; user has it).
 - PR: https://github.com/lucamezzalira/stale-flag-cleanup/pull/14 (merged)
 - Step Functions: `arn:aws:states:us-east-1:661975750538:execution:stale-flags-cleanup:0301478b-1237-456f-95d0-4f3eee14894d` (`execution-arn.txt`)
 - Dry-run text: `02-scout-dry-run.txt`
+- Live `checkout_redesign` JSON: `05-flag-safety-checkout_redesign.live.json` (`evaluating_share` exact `0.022199999541044235`, prose `0.022` / `2.2%`)
+- Paste-ready verdict `multiIf` after thin-before-minority swap: `verdict-multiIf-excerpt.sql`
