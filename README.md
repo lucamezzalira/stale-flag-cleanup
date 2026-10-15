@@ -194,6 +194,10 @@ sequenceDiagram
 2. **`apps/web` + `flag-client`** evaluate from that datafile.
 3. **`publish-defs` / seed** populate Tinybird definitions + activity.
 4. **Tinybird** pipes are the only eligibility API. Scout and surgeon harness call them over **REST**. The surgeon evidence model (and humans) use **Tinybird MCP**.
+   Verdict order (PRD-08): structural checks → live minority / thin evidence → **then**
+   lifecycle (`deprecated` / `archived`) → abandoned / settled. Deprecation is a request;
+   evidence is the permission. Pitfall: before PRD-08, lifecycle sat above minority-build
+   checks (PR #11 removed a still-live deprecated flag).
 5. **Scout** plans independently `safe_to_remove` flags (`collapse_direction != none`) into S3 `plan.json`. It does not invent nest deletes for parent-gated inconclusive children.
 6. **Surgeon** re-verifies each flag over REST, applies the whole plan in one Fargate session, then opens **one** PR only if every flag passes gates. Evidence narrative is a separate MCP-backed Converse call after gates.
 7. **Humans** merge. Publish syncs CDN. QA: `docs/qa-agent.md`.
@@ -209,11 +213,11 @@ sequenceDiagram
 | Model | n/a | Sonnet 4.5 Converse (edit without tools; evidence with MCP tools) |
 | QA | Ad hoc | Production-bar playbook + new-flag E2E |
 
-Refusals stay. Safe removals are whatever Tinybird marks safe. Latest E2E pair (PR #11,
-merged): `size_guide_panel` (`delete_gated_branch`) and `search_typo_suggest`
-(`keep_gated_branch`). Earlier pairs: `loyalty_stamp_banner` / `express_pay_hint` (#9),
-`promo_banner_2025` / `one_click_buy` (#5/#6). Restore Featurevisor fixtures + seed
-recipes before a re-demo.
+Refusals stay. Safe removals are whatever Tinybird marks safe. Current fixtures (PRD-08):
+`catalog_clearance_rail` (abandoned / delete_gated), `checkout_trust_badges` (settled /
+keep_gated), `nav_winter_ribbon` (deprecated but live minority → **blocked**). Earlier
+pairs: `size_guide_panel` / `search_typo_suggest` (#11), `loyalty_stamp_banner` /
+`express_pay_hint` (#9), `promo_banner_2025` / `one_click_buy` (#5/#6).
 
 ### Parts in this repo
 

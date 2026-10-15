@@ -121,13 +121,13 @@ SQL >
             d.parent_key != '' AND coalesce(a.blocked_events, 0) > 0 AND coalesce(a.evaluated_events, 0) = 0, 'inconclusive',
             coalesce(de.descendant_count, 0) > 0, 'blocked',
             d.target_value = '' AND (d.variation_count > 1 OR coalesce(a.evaluated_events, 0) >= {{ Int32(min_events_floor, 20) }}), 'blocked',
-            (d.deprecated = 1 OR d.archived = 1) AND d.target_value = '', 'blocked',
-            d.deprecated = 1 OR d.archived = 1, 'safe_to_remove',
             coalesce(a.evaluated_events, 0) > 0 AND coalesce(ls.live_hit_count, 0) > 0 AND coalesce(ls.evaluating_share, 0) < 0.5, 'blocked',
             (coalesce(a.evaluated_events, 0) + coalesce(a.blocked_events, 0)) > 0
               AND (coalesce(a.evaluated_events, 0) + coalesce(a.blocked_events, 0)) < {{ Int32(min_events_floor, 20) }}, 'inconclusive',
             fs.first_seen IS NOT NULL AND fs.first_seen >= toDate(now() - toIntervalDay({{ Int32(window_days, 90) }})), 'inconclusive',
             coalesce(a.evaluated_events, 0) > 0 AND coalesce(a.evaluated_events, 0) < {{ Int32(min_events_floor, 20) }}, 'inconclusive',
+            (d.deprecated = 1 OR d.archived = 1) AND d.target_value = '', 'blocked',
+            d.deprecated = 1 OR d.archived = 1, 'safe_to_remove',
             coalesce(a.evaluated_events, 0) = 0, 'safe_to_remove',
             coalesce(a.evaluated_events, 0) >= {{ Int32(min_events_for_settled, 1000) }}
               AND coalesce(a.distinct_variations, 0) = 1
@@ -139,13 +139,13 @@ SQL >
             d.parent_key != '' AND coalesce(a.blocked_events, 0) > 0 AND coalesce(a.evaluated_events, 0) = 0, 'abandoned',
             coalesce(de.descendant_count, 0) > 0, if(d.deprecated = 1 OR d.archived = 1, 'lifecycle', 'abandoned'),
             d.target_value = '' AND (d.variation_count > 1 OR coalesce(a.evaluated_events, 0) >= {{ Int32(min_events_floor, 20) }}), if(d.deprecated = 1 OR d.archived = 1, 'lifecycle', 'settled'),
-            (d.deprecated = 1 OR d.archived = 1) AND d.target_value = '', 'lifecycle',
-            d.deprecated = 1 OR d.archived = 1, 'lifecycle',
             coalesce(a.evaluated_events, 0) > 0 AND coalesce(ls.live_hit_count, 0) > 0 AND coalesce(ls.evaluating_share, 0) < 0.5, 'abandoned',
             (coalesce(a.evaluated_events, 0) + coalesce(a.blocked_events, 0)) > 0
               AND (coalesce(a.evaluated_events, 0) + coalesce(a.blocked_events, 0)) < {{ Int32(min_events_floor, 20) }}, 'abandoned',
             fs.first_seen IS NOT NULL AND fs.first_seen >= toDate(now() - toIntervalDay({{ Int32(window_days, 90) }})), 'abandoned',
             coalesce(a.evaluated_events, 0) > 0 AND coalesce(a.evaluated_events, 0) < {{ Int32(min_events_floor, 20) }}, 'abandoned',
+            (d.deprecated = 1 OR d.archived = 1) AND d.target_value = '', 'lifecycle',
+            d.deprecated = 1 OR d.archived = 1, 'lifecycle',
             coalesce(a.evaluated_events, 0) = 0, 'abandoned',
             coalesce(a.evaluated_events, 0) >= {{ Int32(min_events_for_settled, 1000) }}
               AND coalesce(a.distinct_variations, 0) = 1
@@ -160,12 +160,10 @@ SQL >
                 concat('Flag ', d.flag_key, ' still has living descendants (', arrayStringConcat(de.descendant_keys, ', '), '). Removal must proceed bottom up.'),
             d.target_value = '' AND (d.variation_count > 1 OR coalesce(a.evaluated_events, 0) >= {{ Int32(min_events_floor, 20) }}),
                 concat('Flag ', d.flag_key, ' is mid-ramp at ', toString(d.rollout_percentage), '% (or multi-variation) with no single target_value, so the code cannot be collapsed safely.'),
-            (d.deprecated = 1 OR d.archived = 1) AND d.target_value = '',
-                concat('Flag ', d.flag_key, ' is marked for removal but has no single target_value to collapse to.'),
-            d.deprecated = 1 OR d.archived = 1,
-                concat('Featurevisor marked ', d.flag_key, ' as ', if(d.deprecated = 1, 'deprecated', 'archived'), ', structural checks passed, and target_value=', d.target_value, ' supports collapse.'),
             coalesce(a.evaluated_events, 0) > 0 AND coalesce(ls.live_hit_count, 0) > 0 AND coalesce(ls.evaluating_share, 0) < 0.5,
-                concat('Flag ', d.flag_key, ' is still evaluated by a live minority build cohort (evaluating_share=', toString(round(coalesce(ls.evaluating_share, 0), 3)), ').'),
+                if(d.deprecated = 1 OR d.archived = 1,
+                    concat('Featurevisor marks ', d.flag_key, ' as ', if(d.deprecated = 1, 'deprecated', 'archived'), ', but it is still evaluated by a live minority build cohort (evaluating_share=', toString(round(coalesce(ls.evaluating_share, 0), 3)), '). Deprecation is a request; the evidence does not yet permit removal.'),
+                    concat('Flag ', d.flag_key, ' is still evaluated by a live minority build cohort (evaluating_share=', toString(round(coalesce(ls.evaluating_share, 0), 3)), ').')),
             (coalesce(a.evaluated_events, 0) + coalesce(a.blocked_events, 0)) > 0
               AND (coalesce(a.evaluated_events, 0) + coalesce(a.blocked_events, 0)) < {{ Int32(min_events_floor, 20) }},
                 concat('Flag ', d.flag_key, ' has only ', toString(coalesce(a.evaluated_events, 0) + coalesce(a.blocked_events, 0)), ' events in the window, which is too thin to support a removal decision.'),
@@ -173,6 +171,10 @@ SQL >
                 concat('Flag ', d.flag_key, ' first appeared on ', toString(fs.first_seen), ', inside the window, so the quiet period is incomplete.'),
             coalesce(a.evaluated_events, 0) > 0 AND coalesce(a.evaluated_events, 0) < {{ Int32(min_events_floor, 20) }},
                 concat('Flag ', d.flag_key, ' has only ', toString(coalesce(a.evaluated_events, 0)), ' evaluated events in the window, which is too thin to support a removal decision.'),
+            (d.deprecated = 1 OR d.archived = 1) AND d.target_value = '',
+                concat('Flag ', d.flag_key, ' is marked for removal but has no single target_value to collapse to.'),
+            d.deprecated = 1 OR d.archived = 1,
+                concat('Featurevisor marked ', d.flag_key, ' as ', if(d.deprecated = 1, 'deprecated', 'archived'), ', structural checks passed, and target_value=', d.target_value, ' supports collapse.'),
             coalesce(a.evaluated_events, 0) = 0,
                 concat('Flag ', d.flag_key, ' had zero evaluated events in the window, no live-build hits, and target_value=', d.target_value, ' supports collapse.'),
             coalesce(a.evaluated_events, 0) >= {{ Int32(min_events_for_settled, 1000) }}

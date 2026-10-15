@@ -10,16 +10,16 @@ Do **not** merge PRs yourself. Do **not** treat REVISION-only diffs as success.
 
 Current safe fixtures for a green demo:
 
-| Flag | Collapse | BEFORE UI | AFTER UI |
+| Flag | Collapse / verdict | BEFORE UI | AFTER UI |
 |---|---|---|---|
-| `size_guide_panel` | `delete_gated_branch` | Listing shows Size guide panel | Panel **gone** |
-| `search_typo_suggest` | `keep_gated_branch` | Search shows “Did you mean…” chip | Chip **kept**, flag plumbing **gone** |
+| `catalog_clearance_rail` | abandoned / `delete_gated_branch` | Listing clearance (off at 0%) | Flag + panel plumbing **gone** |
+| `checkout_trust_badges` | settled / `keep_gated_branch` | Checkout trust badges | Badges **kept**, flag plumbing **gone** |
+| `nav_winter_ribbon` | **blocked** (deprecated + live minority) | Listing winter ribbon | **Still present** (must not be in PR) |
 
-Refusals (still present, no PR): `wishlist` (+ children), `checkout_redesign`, `shipping_estimator`, `search_ranking_v2`.
+Refusals (still present, no PR): `wishlist` (+ children), `checkout_redesign`, `shipping_estimator`, `search_ranking_v2`, `nav_winter_ribbon`.
 
-Assert by **key lists from scout `plan.json`**, never `candidates.length === 2` with fixed
-promo/one_click or loyalty/express keys. Latest proven pair: `size_guide_panel` +
-`search_typo_suggest` (PR #11, SFN `4541b483-…`).
+Assert by **key lists from scout `plan.json`**. PRD-08: deprecation does not override live
+minority evidence.
 
 Web URL: stack `WebUrl` (`https://dj37uarwx2jpn.cloudfront.net`).
 Datafile: `https://d1jcup3snfgsrs.cloudfront.net/featurevisor/production/featurevisor-all.json`.

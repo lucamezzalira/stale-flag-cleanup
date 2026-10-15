@@ -23,3 +23,21 @@ tb deploy
 Resource-scoped MCP evidence token is declared in the pipes as `TOKEN surgeon_mcp_evidence READ` on `flag_safety_check.pipe` and `cleanup_report.pipe`. After `tb --cloud deploy`, copy that token into `.env` as `TINYBIRD_MCP_TOKEN` (`tb --cloud --show-tokens token ls`) and run `pnpm infra:secrets` so Secrets Manager `stale-flags/agent` has the key for the surgeon Fargate task only.
 
 `flag_safety_check` takes query param `key` (the flag key). Activity nodes must qualify `flag_daily_activity.flag_key` (table alias). Selecting `{{ String(key) }} AS flag_key` next to an unqualified `WHERE flag_key = …` makes ClickHouse bind WHERE to the SELECT alias, so the filter always matches and event counts become workspace-wide.
+
+## Verdict cascade (PRD-08)
+
+Order in `flag_safety_check` / `cleanup_report` `multiIf` (and `packages/verdicts`):
+
+1. Missing definition → `blocked`
+2. Parent-gated, zero evaluations → `inconclusive`
+3. Living descendants → `blocked`
+4. No single `target_value` (mid-ramp / multi-variation) → `blocked`
+5. Live minority builds (`evaluating_share` &lt; 0.5) → `blocked` (reason mentions deprecation when set)
+6. Thin evidence / first seen inside window → `inconclusive`
+7. Deprecated or archived (after evidence passed) → `safe_to_remove`, route `lifecycle`
+8. Zero evaluations → `safe_to_remove`, route `abandoned`
+9. Settled (single variation, rollout 0/100, enough events, share ≥ 0.5) → `safe_to_remove`, route `settled`
+10. Otherwise → `inconclusive`
+
+**Pitfall:** Lifecycle markers made flags eligible before live traffic was checked (PR #11);
+deprecation now only makes a flag a candidate.

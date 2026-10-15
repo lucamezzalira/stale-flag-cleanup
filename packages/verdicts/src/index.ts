@@ -338,35 +338,13 @@ export function runSafetyCheck(
     );
   }
 
-  if (def.deprecated === 1 || def.archived === 1) {
-    if (!def.target_value) {
-      return buildVerdict(
-        params.flag_key,
-        def,
-        "blocked",
-        "lifecycle",
-        `Flag ${params.flag_key} is marked for removal but has no single target_value to collapse to.`,
-        baseEvidence,
-        "none",
-      );
-    }
-    const collapse = collapseDirectionFromTarget(def.target_value);
-    return buildVerdict(
-      params.flag_key,
-      def,
-      "safe_to_remove",
-      "lifecycle",
-      `Featurevisor marked ${params.flag_key} as ${def.deprecated ? "deprecated" : "archived"}, structural checks passed, and target_value=${def.target_value} supports collapse_direction=${collapse}.`,
-      baseEvidence,
-    );
-  }
-
   const settledShape =
     win.evaluatedCount >= cfg.min_events_for_settled &&
     win.variationCounts.size === 1 &&
     (def.rollout_percentage === 0 || def.rollout_percentage === 100) &&
     win.evaluatingShare >= 0.5;
 
+  // Evidence before lifecycle: deprecation is a request, not permission.
   if (
     win.evaluatedCount > 0 &&
     win.liveHits.length > 0 &&
@@ -375,15 +353,17 @@ export function runSafetyCheck(
     const hit = [...win.liveHits].sort(
       (a, b) => b.session_share - a.session_share,
     )[0]!;
-    const daily = Math.round(
-      hit.evaluated_events / Math.max(cfg.window_days, 1),
-    );
+    const share = win.evaluatingShare.toFixed(3);
+    const reason =
+      def.deprecated === 1 || def.archived === 1
+        ? `Featurevisor marks ${params.flag_key} as ${def.deprecated ? "deprecated" : "archived"}, but it is still evaluated by a live minority build cohort (evaluating_share=${share}). Deprecation is a request; the evidence does not yet permit removal.`
+        : `Flag ${params.flag_key} is still evaluated by live build ${hit.build_id} (released ${hit.released_at}, session_share=${hit.session_share.toFixed(3)}, evaluating_share=${share}).`;
     return buildVerdict(
       params.flag_key,
       def,
       "blocked",
       "abandoned",
-      `Flag ${params.flag_key} is still evaluated by live build ${hit.build_id} (released ${hit.released_at}, session_share=${hit.session_share.toFixed(3)}, ~${daily} evaluated events/day).`,
+      reason,
       baseEvidence,
     );
   }
@@ -420,6 +400,29 @@ export function runSafetyCheck(
       "inconclusive",
       "abandoned",
       `Flag ${params.flag_key} has only ${win.evaluatedCount} evaluated events in the ${cfg.window_days}-day window, which is too thin to support a removal decision.`,
+      baseEvidence,
+    );
+  }
+
+  if (def.deprecated === 1 || def.archived === 1) {
+    if (!def.target_value) {
+      return buildVerdict(
+        params.flag_key,
+        def,
+        "blocked",
+        "lifecycle",
+        `Flag ${params.flag_key} is marked for removal but has no single target_value to collapse to.`,
+        baseEvidence,
+        "none",
+      );
+    }
+    const collapse = collapseDirectionFromTarget(def.target_value);
+    return buildVerdict(
+      params.flag_key,
+      def,
+      "safe_to_remove",
+      "lifecycle",
+      `Featurevisor marked ${params.flag_key} as ${def.deprecated ? "deprecated" : "archived"}, structural checks passed, and target_value=${def.target_value} supports collapse_direction=${collapse}.`,
       baseEvidence,
     );
   }

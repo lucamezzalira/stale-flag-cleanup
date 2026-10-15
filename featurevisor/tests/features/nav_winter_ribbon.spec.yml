@@ -1,0 +1,8 @@
+feature: nav_winter_ribbon
+assertions:
+  - at: 50
+    description: "Winter ribbon still resolves enabled at 100%"
+    environment: production
+    context:
+      userId: user-smoke-1
+    expectedToBeEnabled: true

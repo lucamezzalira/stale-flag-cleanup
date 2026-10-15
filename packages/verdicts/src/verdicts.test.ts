@@ -147,7 +147,7 @@ function baseStore(overrides: Partial<EvidenceStore> = {}): EvidenceStore {
 }
 
 describe("runSafetyCheck", () => {
-  it("marks deprecated lifecycle flags safe_to_remove before live-build checks", () => {
+  it("marks quiet deprecated flags safe_to_remove via lifecycle after evidence checks", () => {
     const store = baseStore();
     const promo = runSafetyCheck(store, {
       flag_key: "promo_banner_2025",
@@ -157,6 +157,8 @@ describe("runSafetyCheck", () => {
     assert.equal(promo.route, "lifecycle");
     assert.equal(promo.collapse_direction, "delete_gated_branch");
 
+    // Heavy modern traffic with evaluating_share >= 0.5 still allows lifecycle
+    // once minority-build evidence has passed.
     const oneClick = runSafetyCheck(store, {
       flag_key: "one_click_buy",
       now,
@@ -164,6 +166,104 @@ describe("runSafetyCheck", () => {
     assert.equal(oneClick.verdict, "safe_to_remove");
     assert.equal(oneClick.route, "lifecycle");
     assert.equal(oneClick.collapse_direction, "keep_gated_branch");
+  });
+
+  it("blocks deprecated flags still evaluated by a live minority cohort", () => {
+    const store = baseStore({
+      definitions: [
+        ...baseStore().definitions,
+        def({
+          flag_key: "nav_winter_ribbon",
+          rollout_percentage: 100,
+          target_value: "true",
+          deprecated: 1,
+        }),
+      ],
+      activity: [
+        ...baseStore().activity,
+        {
+          day: "2026-09-01",
+          flag_key: "nav_winter_ribbon",
+          app: "web",
+          build_id: "b-sticky",
+          outcome: "evaluated",
+          variation: "true",
+          event_count: 300,
+        },
+      ],
+      firstSeen: {
+        ...baseStore().firstSeen!,
+        nav_winter_ribbon: "2025-01-01",
+      },
+    });
+    const row = runSafetyCheck(store, { flag_key: "nav_winter_ribbon", now });
+    assert.equal(row.verdict, "blocked");
+    assert.equal(row.route, "abandoned");
+    assert.match(row.reason, /deprecated/i);
+    assert.match(row.reason, /evaluating_share/);
+    assert.match(row.reason, /Deprecation is a request/);
+  });
+
+  it("marks non-deprecated zero-evaluation flags safe via abandoned", () => {
+    const store = baseStore({
+      definitions: [
+        ...baseStore().definitions,
+        def({
+          flag_key: "catalog_clearance_rail",
+          rollout_percentage: 0,
+          target_value: "false",
+          deprecated: 0,
+        }),
+      ],
+      firstSeen: {
+        ...baseStore().firstSeen!,
+        catalog_clearance_rail: "2025-01-01",
+      },
+    });
+    const row = runSafetyCheck(store, {
+      flag_key: "catalog_clearance_rail",
+      now,
+    });
+    assert.equal(row.verdict, "safe_to_remove");
+    assert.equal(row.route, "abandoned");
+    assert.equal(row.collapse_direction, "delete_gated_branch");
+  });
+
+  it("marks non-deprecated settled flags safe via settled", () => {
+    const store = baseStore({
+      definitions: [
+        ...baseStore().definitions.filter((d) => d.flag_key !== "one_click_buy"),
+        def({
+          flag_key: "checkout_trust_badges",
+          rollout_percentage: 100,
+          target_value: "true",
+          deprecated: 0,
+        }),
+      ],
+      activity: [
+        ...baseStore().activity.filter((a) => a.flag_key !== "one_click_buy"),
+        {
+          day: "2026-09-01",
+          flag_key: "checkout_trust_badges",
+          app: "web",
+          build_id: "b-modern",
+          outcome: "evaluated",
+          variation: "true",
+          event_count: 5000,
+        },
+      ],
+      firstSeen: {
+        ...baseStore().firstSeen!,
+        checkout_trust_badges: "2025-01-01",
+      },
+    });
+    const row = runSafetyCheck(store, {
+      flag_key: "checkout_trust_badges",
+      now,
+    });
+    assert.equal(row.verdict, "safe_to_remove");
+    assert.equal(row.route, "settled");
+    assert.equal(row.collapse_direction, "keep_gated_branch");
   });
 
   it("returns inconclusive for parent-gated before descendant blocking", () => {

@@ -193,15 +193,27 @@ async function main(): Promise<void> {
       const isSticky = b.id === stickyId;
       const isModern = !isSticky;
 
-      // search_typo_suggest: heavy settled traffic on modern builds (keep_gated)
+      // checkout_trust_badges: heavy settled traffic on modern builds (keep_gated, not deprecated)
       if (isModern) {
         bump(
           ds,
-          "search_typo_suggest",
+          "checkout_trust_badges",
           b.id,
           "evaluated",
           "true",
           buildSessions * 3,
+        );
+      }
+
+      // nav_winter_ribbon: sticky old build only (deprecated but live minority → blocked)
+      if (isSticky) {
+        bump(
+          ds,
+          "nav_winter_ribbon",
+          b.id,
+          "evaluated",
+          "true",
+          Math.floor(200 + rng() * 100),
         );
       }
 
@@ -260,18 +272,18 @@ async function main(): Promise<void> {
         );
       }
 
-      // size_guide_panel: only before window when deprecated+0% (handled outside)
+      // catalog_clearance_rail: only before window (abandoned / delete_gated, not deprecated)
       // search_ranking_v2: sparse — sprinkle later
     }
   }
 
-  // size_guide_panel: activity ending before window (delete_gated / abandoned)
+  // catalog_clearance_rail: activity ending before window (abandoned evidence-only)
   for (let offset = days + 40; offset > days + 5; offset--) {
     const day = new Date(now);
     day.setUTCDate(day.getUTCDate() - offset);
     const ds = dayString(day);
     const b = builds[0]!;
-    bump(ds, "size_guide_panel", b.id, "evaluated", "false", 50);
+    bump(ds, "catalog_clearance_rail", b.id, "evaluated", "false", 50);
   }
 
   // search_ranking_v2: 5–15 evaluated across whole window
