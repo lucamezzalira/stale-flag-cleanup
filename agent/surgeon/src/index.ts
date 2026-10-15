@@ -865,6 +865,10 @@ async function reverifyFlagSafety(payload: Payload): Promise<SafetyCheckRow> {
     target_value: live.target_value ?? payload.target_value,
     evaluated_events: live.evaluated_events,
     blocked_events: live.blocked_events,
+    evaluating_share:
+      typeof live.evaluating_share === "number"
+        ? live.evaluating_share
+        : Number(live.evaluating_share ?? Number.NaN),
     datafile_revision: live.datafile_revision ?? payload.datafile_revision,
   };
 }
