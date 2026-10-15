@@ -1,0 +1,29 @@
+
+> stale-flag-cleanup@0.1.0 agent:scout /Users/lucamezzalira/Documents/tinybird
+> pnpm --filter @stale-flags/scout exec tsx src/index.ts -- --dry-run
+
+Scout run_id=run_20261015T123559 dryRun=true source=tinybird-rest dispatch=true
+
+tinybird_rest endpoint=flag_candidates status=200 rows=9
+tinybird_rest endpoint=cleanup_report status=200 rows=9
+catalog_clearance_rail   route=abandoned  safe_to_remove   delete_gated_branch
+  Flag catalog_clearance_rail had zero evaluated events in the window, no live-build hits, and target_value=false supports collapse.
+checkout_redesign        route=abandoned  blocked          keep_gated_branch
+  Flag checkout_redesign is still evaluated by a live minority build cohort (evaluating_share=0.04).
+checkout_trust_badges    route=settled    safe_to_remove   keep_gated_branch
+  Flag checkout_trust_badges is settled: 135927 evaluations, rollout=100%.
+nav_winter_ribbon        route=abandoned  blocked          keep_gated_branch
+  Featurevisor marks nav_winter_ribbon as deprecated, but it is still evaluated by a live minority build cohort (evaluating_share=0.04). Deprecation is a request; the evidence does not yet permit removal.
+search_ranking_v2        route=abandoned  inconclusive     none
+  Flag search_ranking_v2 has only 10 events in the window, which is too thin to support a removal decision.
+shipping_estimator       route=settled    blocked          none
+  Flag shipping_estimator is mid-ramp at 60% (or multi-variation) with no single target_value, so the code cannot be collapsed safely.
+wishlist                 route=abandoned  blocked          delete_gated_branch
+  Flag wishlist still has living descendants (wishlist_sharing_qr, wishlist_sharing). Removal must proceed bottom up.
+wishlist_sharing         route=abandoned  inconclusive     keep_gated_branch
+  Flag wishlist_sharing was never evaluated in the window because parent wishlist gated every lookup (15776 blocked_by_parent events). Absence of evaluations is not evidence of disuse.
+wishlist_sharing_qr      route=abandoned  inconclusive     keep_gated_branch
+  Flag wishlist_sharing_qr was never evaluated in the window because parent wishlist_sharing gated every lookup (12220 blocked_by_parent events). Absence of evaluations is not evidence of disuse.
+
+Proposed surgeon actions: catalog_clearance_rail, checkout_trust_badges
+Re-run with --full to write cleanup_decision_log and dispatch surgeons.
