@@ -263,6 +263,25 @@ importers:
         specifier: ^5.9.2
         version: 5.9.3
 
+  tools/verdict-parity:
+    dependencies:
+      '@stale-flags/local-store':
+        specifier: workspace:*
+        version: link:../../packages/local-store
+      '@stale-flags/verdicts':
+        specifier: workspace:*
+        version: link:../../packages/verdicts
+    devDependencies:
+      '@types/node':
+        specifier: ^24.3.0
+        version: 24.19.1
+      tsx:
+        specifier: ^4.20.5
+        version: 4.23.15
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+
 packages:
 
   '@aws-cdk/asset-awscli-v1@2.2.292':

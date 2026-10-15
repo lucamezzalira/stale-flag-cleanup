@@ -98,7 +98,10 @@ function resolveParams(
 ): ResolvedParams {
   const window_days = params?.window_days ?? DEFAULT_SAFETY_PARAMS.window_days;
   const now = params?.now ?? new Date();
-  const windowStart = new Date(now);
+  // Match ClickHouse `toDate(now() - toIntervalDay(N))`: calendar day, not wall time.
+  const windowStart = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
   windowStart.setUTCDate(windowStart.getUTCDate() - window_days);
   return {
     window_days,
@@ -266,7 +269,9 @@ export function aggregateWindow(
     liveHits,
     evaluatingShare: liveHits.reduce((s, h) => s + h.session_share, 0),
     firstSeen,
-    descendants: descendantsOf(flagKey, defs),
+    descendants: descendantsOf(flagKey, defs).sort((a, b) =>
+      a.localeCompare(b),
+    ),
   };
 }
 
@@ -369,7 +374,7 @@ export function runSafetyCheck(
       def,
       "inconclusive",
       "abandoned",
-      `Flag ${params.flag_key} has only ${win.totalEvents} events in the ${cfg.window_days}-day window, which is too thin to support a removal decision.`,
+      `Flag ${params.flag_key} has only ${win.totalEvents} events in the window, which is too thin to support a removal decision.`,
       baseEvidence,
     );
   }
@@ -383,7 +388,7 @@ export function runSafetyCheck(
       def,
       "inconclusive",
       "abandoned",
-      `Flag ${params.flag_key} first appeared on ${win.firstSeen}, inside the ${cfg.window_days}-day window, so the quiet period is incomplete.`,
+      `Flag ${params.flag_key} first appeared on ${win.firstSeen}, inside the window, so the quiet period is incomplete.`,
       baseEvidence,
     );
   }
@@ -394,7 +399,7 @@ export function runSafetyCheck(
       def,
       "inconclusive",
       "abandoned",
-      `Flag ${params.flag_key} has only ${win.evaluatedCount} evaluated events in the ${cfg.window_days}-day window, which is too thin to support a removal decision.`,
+      `Flag ${params.flag_key} has only ${win.evaluatedCount} evaluated events in the window, which is too thin to support a removal decision.`,
       baseEvidence,
     );
   }
@@ -405,15 +410,12 @@ export function runSafetyCheck(
     win.liveHits.length > 0 &&
     win.evaluatingShare < 0.5
   ) {
-    const hit = [...win.liveHits].sort(
-      (a, b) => b.session_share - a.session_share,
-    )[0]!;
     const pct = formatEvaluatingSharePct(win.evaluatingShare);
-    const share = win.evaluatingShare.toFixed(3);
+    const share = Number(win.evaluatingShare.toFixed(3));
     const reason =
       def.deprecated === 1 || def.archived === 1
         ? `Featurevisor marks ${params.flag_key} as ${def.deprecated ? "deprecated" : "archived"}, but builds serving ${pct} of current sessions still evaluate it. Deprecation makes a flag a candidate; the evidence does not yet permit removal.`
-        : `Flag ${params.flag_key} is still evaluated by builds serving ${pct} of current sessions (build ${hit.build_id}, released ${hit.released_at}, evaluating_share=${share}).`;
+        : `Flag ${params.flag_key} is still evaluated by builds serving ${pct} of current sessions (evaluating_share=${share}).`;
     return buildVerdict(
       params.flag_key,
       def,
@@ -436,38 +438,34 @@ export function runSafetyCheck(
         "none",
       );
     }
-    const collapse = collapseDirectionFromTarget(def.target_value);
     return buildVerdict(
       params.flag_key,
       def,
       "safe_to_remove",
       "lifecycle",
-      `Featurevisor marked ${params.flag_key} as ${def.deprecated ? "deprecated" : "archived"}, structural checks passed, and target_value=${def.target_value} supports collapse_direction=${collapse}.`,
+      `Featurevisor marked ${params.flag_key} as ${def.deprecated ? "deprecated" : "archived"}, structural checks passed, and target_value=${def.target_value} supports collapse.`,
       baseEvidence,
     );
   }
 
   if (win.evaluatedCount === 0) {
-    const collapse = collapseDirectionFromTarget(def.target_value);
     return buildVerdict(
       params.flag_key,
       def,
       "safe_to_remove",
       "abandoned",
-      `Flag ${params.flag_key} had zero evaluated events in the last ${cfg.window_days} days, no live-build hits, and target_value=${def.target_value} supports ${collapse}.`,
+      `Flag ${params.flag_key} had zero evaluated events in the window, no live-build hits, and target_value=${def.target_value} supports collapse.`,
       baseEvidence,
     );
   }
 
   if (settledShape) {
-    const only = [...win.variationCounts.keys()][0];
-    const collapse = collapseDirectionFromTarget(def.target_value);
     return buildVerdict(
       params.flag_key,
       def,
       "safe_to_remove",
       "settled",
-      `Flag ${params.flag_key} is settled: ${win.evaluatedCount} evaluations in ${cfg.window_days} days all returned variation=${only}, rollout=${def.rollout_percentage}%, collapse=${collapse}.`,
+      `Flag ${params.flag_key} is settled: ${win.evaluatedCount} evaluations, rollout=${def.rollout_percentage}%.`,
       baseEvidence,
     );
   }

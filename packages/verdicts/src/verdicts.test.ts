@@ -441,7 +441,7 @@ describe("runSafetyCheck", () => {
       now,
     });
     assert.equal(redesign.verdict, "blocked");
-    assert.match(redesign.reason, /b-sticky/);
+    assert.match(redesign.reason, /evaluating_share=/);
   });
 
   it("returns inconclusive for thin evidence before minority blocking", () => {

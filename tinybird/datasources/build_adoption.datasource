@@ -1,4 +1,4 @@
-TOKEN append_events APPEND
+TOKEN adoption_writer APPEND
 
 SCHEMA >
     `snapshot_date` Date `json:$.snapshot_date`,

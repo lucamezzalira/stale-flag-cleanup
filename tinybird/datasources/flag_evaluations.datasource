@@ -1,4 +1,4 @@
-TOKEN append_events APPEND
+TOKEN browser_events APPEND
 
 SCHEMA >
     `timestamp` DateTime `json:$.timestamp`,

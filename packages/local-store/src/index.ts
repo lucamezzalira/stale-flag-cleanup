@@ -93,7 +93,8 @@ export async function loadStore(): Promise<
   return { definitions, activity, adoption, decisions, firstSeen };
 }
 
-async function loadDotEnvOnce(): Promise<void> {
+/** Load repo-root `.env` into `process.env` (no overwrite of existing keys). */
+export async function loadDotEnvOnce(): Promise<void> {
   if ((globalThis as { __staleFlagsDotEnv?: boolean }).__staleFlagsDotEnv) return;
   (globalThis as { __staleFlagsDotEnv?: boolean }).__staleFlagsDotEnv = true;
   try {
@@ -153,9 +154,15 @@ export async function truncateTinybirdDatasources(
     process.env.TINYBIRD_API_HOST ?? "https://api.us-east.aws.tinybird.co";
   const token = await resolveAdminToken(host);
   if (!token) {
-    if (process.env.TINYBIRD_APPEND_TOKEN || process.env.TINYBIRD_TOKEN) {
+    if (
+      process.env.TINYBIRD_BROWSER_EVENTS_TOKEN ||
+      process.env.TINYBIRD_DEFS_TOKEN ||
+      process.env.TINYBIRD_ADOPTION_TOKEN ||
+      process.env.TINYBIRD_DECISION_TOKEN ||
+      process.env.TINYBIRD_TOKEN
+    ) {
       throw new Error(
-        "Tinybird truncate requires TINYBIRD_ADMIN_TOKEN or a .tinyb admin token (scoped endpoint_read/append tokens cannot TRUNCATE)",
+        "Tinybird truncate requires TINYBIRD_ADMIN_TOKEN or a .tinyb admin token (scoped append/read tokens cannot TRUNCATE)",
       );
     }
     console.warn("No Tinybird credentials; skip Tinybird truncate");
@@ -202,6 +209,29 @@ export const DEMO_TINYBIRD_TABLES = [
   "session_beacons",
 ] as const;
 
+/** Resolve the scoped Events API token for a datasource (PRD-10). */
+export function appendTokenForDatasource(name: string): string {
+  switch (name) {
+    case "flag_evaluations":
+    case "session_beacons":
+      return (
+        process.env.TINYBIRD_BROWSER_EVENTS_TOKEN ||
+        process.env.VITE_TINYBIRD_BROWSER_EVENTS_TOKEN ||
+        ""
+      );
+    case "flag_definitions":
+      return process.env.TINYBIRD_DEFS_TOKEN || "";
+    case "build_adoption":
+      return process.env.TINYBIRD_ADOPTION_TOKEN || "";
+    case "cleanup_decision_log":
+      return process.env.TINYBIRD_DECISION_TOKEN || "";
+    case "flag_daily_activity":
+      return "";
+    default:
+      return "";
+  }
+}
+
 export async function ingestToTinybird(
   name: string,
   rows: object[],
@@ -209,12 +239,16 @@ export async function ingestToTinybird(
   await loadDotEnvOnce();
   const host =
     process.env.TINYBIRD_API_HOST ?? "https://api.us-east.aws.tinybird.co";
-  const token =
-    process.env.TINYBIRD_APPEND_TOKEN ?? process.env.TINYBIRD_TOKEN ?? "";
+  if (name === "flag_daily_activity") {
+    throw new Error(
+      "flag_daily_activity has no APPEND token; write flag_evaluations and let the MV populate it",
+    );
+  }
+  const token = appendTokenForDatasource(name);
   if (!token || rows.length === 0) {
     if (rows.length > 0 && !token) {
       console.warn(
-        `Skip Tinybird ingest ${name}: no TINYBIRD_APPEND_TOKEN / TINYBIRD_TOKEN`,
+        `Skip Tinybird ingest ${name}: missing scoped append token for this datasource`,
       );
     }
     return;

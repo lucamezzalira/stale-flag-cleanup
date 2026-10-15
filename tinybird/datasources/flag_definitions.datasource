@@ -1,4 +1,4 @@
-TOKEN append_events APPEND
+TOKEN defs_publisher APPEND
 
 SCHEMA >
     `captured_at` DateTime `json:$.captured_at`,

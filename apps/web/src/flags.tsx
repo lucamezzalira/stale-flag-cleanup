@@ -38,7 +38,8 @@ export function FlagProvider({ children }: { children: ReactNode }) {
       datafileUrl,
       buildId: (import.meta.env.VITE_BUILD_ID as string) || "dev.local",
       eventsUrl: import.meta.env.VITE_TINYBIRD_API_HOST as string | undefined,
-      eventsToken: import.meta.env.VITE_TINYBIRD_APPEND_TOKEN as string | undefined,
+      eventsToken: import.meta.env
+        .VITE_TINYBIRD_BROWSER_EVENTS_TOKEN as string | undefined,
       flushIntervalMs: Number(import.meta.env.VITE_EVENT_FLUSH_MS ?? 2000),
       batchSize: Number(import.meta.env.VITE_EVENT_BATCH_SIZE ?? 20),
     })
