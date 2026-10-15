@@ -286,6 +286,15 @@ async function main(): Promise<void> {
     bump(ds, "catalog_clearance_rail", b.id, "evaluated", "false", 50);
   }
 
+  // checkout_trust_badges: also appear before the window so first_seen is not inside it
+  for (let offset = days + 40; offset > days + 5; offset--) {
+    const day = new Date(now);
+    day.setUTCDate(day.getUTCDate() - offset);
+    const ds = dayString(day);
+    const b = builds[builds.length - 1] ?? builds[0]!;
+    bump(ds, "checkout_trust_badges", b.id, "evaluated", "true", 80);
+  }
+
   // search_ranking_v2: 5–15 evaluated across whole window
   const sparse = 5 + Math.floor(rng() * 11);
   for (let i = 0; i < sparse; i++) {
