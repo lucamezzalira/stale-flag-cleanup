@@ -1,0 +1,17 @@
+{
+  "flag_key": "checkout_redesign",
+  "verdict": "blocked",
+  "route": "abandoned",
+  "reason": "Flag checkout_redesign is still evaluated by builds serving 2.2% of current sessions (evaluating_share=0.022).",
+  "target_value": "true",
+  "collapse_direction": "keep_gated_branch",
+  "datafile_revision": "24",
+  "evaluated_events": 22582,
+  "blocked_events": 0,
+  "descendant_count": 0,
+  "evaluating_share": 0.022199999541044235,
+  "rollout_percentage": 100,
+  "parent_key": "",
+  "_source": "Tinybird REST flag_safety_check live call 2026-10-15T13:15Z",
+  "_note": "Dry-run text rounds to evaluating_share=0.022 and 2.2%. Exact float from the pipe is 0.022199999541044235. Prefer quoting 0.022 or 2.2% in prose; keep the full float only if showing raw JSON."
+}

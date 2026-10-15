@@ -46,28 +46,48 @@ flowchart TB
   end
 
   subgraph agent [Background agent]
-    SCOUT[scout Tinybird MCP/REST]
-    SURG[surgeon Bedrock Converse]
+    SCOUT[scout Tinybird REST]
+    SURG[surgeon harness REST re-verify]
+    EDIT[surgeon edit Converse no tools]
+    EVID[surgeon evidence Converse]
     GH[GitHub PR into demo]
     LOG[cleanup_decision_log]
     CAND --> SCOUT
-    SAFE --> SCOUT
+    RPT --> SCOUT
+    SAFE -->|REST re-verify| SURG
     SCOUT -->|verdict + reason| LOG
     SCOUT -->|safe_to_remove only| SURG
-    SURG -->|collapse YAML + app code| GH
+    SURG -->|gates pass| EDIT
+    EDIT -->|YAML + app collapse| GH
+    SURG -->|Decision section| GH
+    EVID -->|Evidence narrative| GH
     SURG --> LOG
   end
 
   subgraph humans [Human surfaces]
     CLI[tools/report]
-    MCP[Tinybird MCP]
-    QA[docs/qa-agent.md + Cursor canvas]
+    MCP[Tinybird MCP scoped token]
+    QA[docs/qa-agent.md + canvas]
     RPT --> CLI
     RPT --> MCP
     SAFE --> MCP
+    MCP --> EVID
     GH --> QA
   end
 ```
+
+### Protocol rule
+
+> Code talks to Tinybird over REST. Models and people talk to Tinybird over MCP.
+> Every safety decision is taken by code, never by a model.
+
+| Caller | Protocol | Can it decide safety? |
+|---|---|---|
+| Scout (deterministic) | REST | No (reads pipe verdicts; plans only) |
+| Surgeon harness (`reverifyFlagSafety`) | REST | Yes (abort on drift; Decision section) |
+| Surgeon editing model (`editLoop`) | none (no Tinybird tools) | No |
+| Surgeon evidence model (post-gates Converse) | MCP (`TINYBIRD_MCP_TOKEN`) | No (narrative only) |
+| Humans / editors | MCP | No (inspection) |
 
 ## Architecture (AWS us-east-1)
 
@@ -75,13 +95,16 @@ flowchart TB
 flowchart LR
   subgraph github [GitHub]
     DEMO[demo branch]
-    PR[agent/remove-* PRs]
+    PR[one multi-flag PR]
     GHA[publish-flags.yml OIDC]
   end
 
   subgraph aws [AWS us-east-1]
     SCH[EventBridge Scheduler<br/>midnight UTC]
-    CB[CodeBuild stale-flags-agent]
+    SFN[Step Functions<br/>stale-flags-cleanup]
+    ScoutECS[Fargate scout]
+    SurgECS[Fargate surgeon]
+    S3R[S3 plan handoff]
     SM[Secrets Manager<br/>stale-flags/agent]
     BR[Bedrock Converse<br/>Sonnet 4.5]
     S3W[S3 web bucket]
@@ -96,13 +119,20 @@ flowchart LR
     EV[Events API + decision log]
   end
 
-  SCH -->|StartBuild| CB
-  SM --> CB
-  CB -->|clone demo| DEMO
-  CB -->|call_endpoint / REST| PIPES
-  CB -->|Converse| BR
-  CB -->|gh pr create| PR
-  CB -->|appendDecisions| EV
+  SCH -->|StartExecution| SFN
+  SFN --> ScoutECS
+  SFN --> SurgECS
+  SM --> ScoutECS
+  SM --> SurgECS
+  ScoutECS -->|clone demo| DEMO
+  ScoutECS -->|REST pipes| PIPES
+  ScoutECS -->|plan.json| S3R
+  S3R --> SFN
+  SurgECS -->|REST re-verify| PIPES
+  SurgECS -->|edit Converse no tools| BR
+  SurgECS -->|evidence Converse + MCP| PIPES
+  SurgECS -->|gh pr create| PR
+  SurgECS -->|appendDecisions| EV
   PR -->|human merge| DEMO
   DEMO --> GHA
   GHA -->|assume| ROLE
@@ -114,7 +144,7 @@ flowchart LR
   CFD -->|datafileUrl| USER
 ```
 
-CodeBuild is the agent host (git, pnpm, ripgrep, Bedrock). It is not a zip Lambda.
+Split Fargate images: scout (REST only, no Bedrock, no MCP) and surgeon (REST re-verify + Bedrock edit without tools + MCP evidence narrative). Step Functions: Scout → Choice → one Surgeon session → Succeeded. Merge gate = GitHub PR notifications (no SNS).
 
 ## Sequence: nightly / on-demand cleanup
 
@@ -122,60 +152,74 @@ CodeBuild is the agent host (git, pnpm, ripgrep, Bedrock). It is not a zip Lambd
 sequenceDiagram
   autonumber
   participant Sch as EventBridge / pnpm infra:agent-run
-  participant CB as CodeBuild
+  participant SFN as Step Functions
+  participant Scout as Fargate scout
+  participant S3 as S3 results
   participant TB as Tinybird pipes
-  participant Scout as scout
+  participant Surg as Fargate surgeon
   participant Bedrock as Bedrock Sonnet 4.5
-  participant Surg as surgeon
   participant GH as GitHub demo
   participant GHA as publish-flags
   participant CDN as CloudFront
 
-  Sch->>CB: StartBuild
-  CB->>CB: clone demo, pnpm install, build workspace pkgs
-  CB->>Scout: pnpm agent:run SCOUT_SOURCE=tinybird
-  Scout->>TB: flag_candidates + cleanup_report / flag_safety_check
-  TB-->>Scout: verdicts + collapse_direction
+  Sch->>SFN: StartExecution
+  SFN->>Scout: emit-json plan
+  Scout->>TB: flag_candidates + cleanup_report REST
+  TB-->>Scout: independently safe_to_remove only
   Scout->>TB: append cleanup_decision_log
-  loop each safe_to_remove
-    Scout->>Surg: dispatch --payload
-    Surg->>Bedrock: Converse edit loop (heuristic fallback)
-    Bedrock-->>Surg: file contents
-    Surg->>Surg: gates tsc vite featurevisor rg allowlist
-    Surg->>GH: commit + PR into demo
-    Surg->>TB: append decision with pr_url
+  Scout->>S3: plan.json
+  SFN->>S3: GetObject + parse
+  alt no candidates
+    SFN-->>SFN: NothingToDo
+  else plan non-empty
+    SFN->>Surg: PLAN_S3_URI
+    loop each planned flag
+      Surg->>TB: REST flag_safety_check re-verify
+      Surg->>Bedrock: edit Converse (no tools)
+      Surg->>Surg: gates
+    end
+    Surg->>TB: MCP call_endpoint evidence (allowlisted)
+    Surg->>Bedrock: evidence Converse
+    Surg->>GH: one PR Decision REST + Evidence MCP
+    Surg->>S3: surgeon-result.json
   end
-  Note over GH: Human merges PRs (agent never merges)
+  Note over GH: Human merges (agent never merges)
   GH->>GHA: push to demo
-  GHA->>CDN: sync datafile + web + invalidate
-  Note over CDN: Listing loses promo UI;<br/>Checkout keeps One-click buy CTA
+  GHA->>CDN: sync + invalidate
 ```
 
 ### How data moves
 
-1. **Featurevisor** holds flag definitions (`featurevisor/features/*.yml`), including `deprecated` / `archived` and parent/child links. Built **datafiles** ship to S3/CloudFront (`pnpm infra:sync` or `publish-flags.yml`).
-2. **`apps/web` + `flag-client`** evaluate flags from that datafile. In this PoC, history is mostly **synthetic** from the generator; the shop proves the client path and post-cleanup UI.
-3. **`publish-defs`** snapshots YAML into `flag_definitions` (rollout %, `target_value`, lifecycle). Collapse direction comes from definitions, not from guessing in code.
-4. **`tools/generator`** seeds ~90 days of activity so all eight demo verdicts reproduce.
-5. **Tinybird** exposes three pipes: `flag_candidates`, `flag_safety_check`, `cleanup_report`. Scout prefers Tinybird MCP `call_endpoint`, with REST fallback.
-6. **Scout** logs every decision to `cleanup_decision_log` and only dispatches **surgeon** for `safe_to_remove`.
-7. **Surgeon** asks **Bedrock Converse** (Sonnet 4.5) to edit app call sites, with a deterministic heuristic fallback. It deletes Featurevisor YAML, runs gates (tsc, vite, featurevisor lint/test, leftover `rg`, path allowlist), then opens a PR against **`demo` only**.
-8. **Humans** merge. Publish syncs CDN. QA playbook: `docs/qa-agent.md` (Cursor canvas per run).
+1. **Featurevisor** holds flag definitions; datafiles ship to S3/CloudFront.
+2. **`apps/web` + `flag-client`** evaluate from that datafile.
+3. **`publish-defs` / seed** populate Tinybird definitions + activity.
+4. **Tinybird** pipes are the only eligibility API. Scout and surgeon harness call them over **REST**. The surgeon evidence model (and humans) use **Tinybird MCP**.
+   Verdict order (PRD-08): structural checks → thin evidence / first-seen → live minority →
+   **then** lifecycle (`deprecated` / `archived`) → abandoned / settled. Deprecation is a request;
+   evidence is the permission. `evaluating_share` is a fraction in `[0, 1]` (latest adoption
+   snapshot per evaluating build). Pitfalls: lifecycle used to sit above evidence checks;
+   PR #11's narrative misreported a summed metric as a percentage.
+5. **Scout** plans independently `safe_to_remove` flags (`collapse_direction != none`) into S3 `plan.json`. It does not invent nest deletes for parent-gated inconclusive children.
+6. **Surgeon** re-verifies each flag over REST, applies the whole plan in one Fargate session, then opens **one** PR only if every flag passes gates. Evidence narrative is a separate MCP-backed Converse call after gates.
+7. **Humans** merge. Publish syncs CDN. QA: `docs/qa-agent.md`.
 
 ### What changed vs the first PoC sketch
 
 | Area | Before | Now |
 |---|---|---|
-| Scout evidence | Local `.local-data` / TS verdicts | Tinybird MCP + REST pipes (TS mirror kept for offline) |
-| Surgeon edits | Hardcoded Listing/Checkout paths | Bedrock Converse loop + heuristic fallback |
-| Surgeon PR prose | Ollama optional | Fallback PR body from payload (Ollama still optional locally) |
-| Agent host | “AgentCore later” notes | CDK CodeBuild + EventBridge Scheduler + Secrets Manager |
-| Model | n/a | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
-| Publish path | Manual sync | `.github/workflows/publish-flags.yml` (OIDC) + `pnpm infra:sync` fallback |
-| Decision log | Local NDJSON | Tinybird `cleanup_decision_log` (truncate on seed/reset) |
-| QA | Ad hoc | `docs/qa-agent.md` + Cursor canvas reports |
+| Scout evidence | Local store / MCP-first | Tinybird REST only (`source=tinybird-rest`) |
+| Surgeon | Per-flag Map | One Fargate session, one multi-flag PR; REST re-verify; MCP evidence narrative |
+| Agent host | Early experiments | EventBridge → SFN → split ECS Fargate images |
+| Merge notify | SNS stub | GitHub PR notifications |
+| Model | n/a | Sonnet 4.5 Converse (edit without tools; evidence with MCP tools) |
+| QA | Ad hoc | Production-bar playbook + new-flag E2E |
 
-Refusals (`blocked`, `inconclusive`) stay. Only `promo_banner_2025` (`delete_gated_branch`) and `one_click_buy` (`keep_gated_branch`) become PRs.
+Refusals stay. Safe removals are whatever Tinybird marks safe. Current fixtures (PRD-08):
+`listing_outlet_banner` (abandoned / delete_gated), `checkout_secure_seal` (settled /
+keep_gated), `nav_winter_ribbon` (deprecated but live minority → **blocked**). Earlier
+pairs: `catalog_clearance_rail` / `checkout_trust_badges` (#12), `size_guide_panel` /
+`search_typo_suggest` (#11), `loyalty_stamp_banner` / `express_pay_hint` (#9),
+`promo_banner_2025` / `one_click_buy` (#5/#6).
 
 ### Parts in this repo
 
@@ -190,17 +234,18 @@ Refusals (`blocked`, `inconclusive`) stay. Only `promo_banner_2025` (`delete_gat
 | `tinybird/` | Datasources + the three pipes |
 | `packages/verdicts` | TS mirror of safety rules + unit tests |
 | `packages/local-store` | `.local-data` NDJSON + Tinybird truncate/append helpers |
-| `agent/scout` | Tinybird-backed scheduler → surgeon dispatch |
-| `agent/surgeon` | Bedrock (or heuristic) collapse + gates + PR |
+| `agent/scout` | Tinybird-backed scout; `--emit-json` for Step Functions |
+| `agent/surgeon` | REST re-verify + Bedrock edit (no tools) + MCP evidence + gates + PR |
+| `docs/handoff-mcp-for-claude.md` | Protocol handoff for article / Claude |
 | `tools/reset` | Reset `demo`, truncate Tinybird, reseed |
-| `infra/` | CDK stack (web, datafiles, CodeBuild, scheduler, OIDC role) |
+| `infra/` | CDK stack (web, datafiles, SFN + Fargate, scheduler, OIDC role) |
 | `.github/workflows/publish-flags.yml` | Push to `main`/`demo` → S3 + CloudFront |
 | `docs/qa-agent.md` | Manual QA agent playbook |
 
 ## Prerequisites
 
 - Node.js >= 24, pnpm 10+
-- Tinybird tokens for cloud path; AWS us-east-1 for CDN + CodeBuild + Bedrock
+- Tinybird tokens for cloud path; AWS us-east-1 for CDN + Step Functions/ECS + Bedrock
 - GitHub token with PR scope (Secrets Manager via `pnpm infra:secrets`)
 - Bedrock model access for Sonnet 4.5 Converse in us-east-1
 
@@ -218,7 +263,9 @@ pnpm report
 SCOUT_SOURCE=tinybird pnpm agent:scout -- --dry-run
 ```
 
-You should see `promo_banner_2025` and `one_click_buy` as `safe_to_remove`, and refusals for the other six.
+With removable fixtures present you should see independently `safe_to_remove` leaves (latest
+pair was `size_guide_panel` + `search_typo_suggest`) plus refusals for wishlist / shipping /
+`search_ranking_v2` / `checkout_redesign`. Scout logs `source=tinybird-rest`.
 
 ```bash
 export VITE_DATAFILE_URL=http://127.0.0.1:4099/production/featurevisor-all.json
@@ -231,7 +278,7 @@ pnpm dev
 pnpm infra:deploy
 pnpm infra:secrets
 pnpm infra:sync
-pnpm infra:agent-run          # CodeBuild; capture build id
+pnpm infra:agent-run          # Step Functions StartExecution; capture executionArn
 # Follow docs/qa-agent.md → canvas report → merge PRs into demo
 # If publish-flags GHA is not wired, run: pnpm infra:sync
 ```
@@ -240,7 +287,10 @@ Set GitHub secret `AWS_GHA_PUBLISH_ROLE_ARN` to stack output `GitHubPublishRoleA
 
 ## MCP (Tinybird)
 
-Scope a token to the three endpoints and add Tinybird MCP in the editor. Scout in CodeBuild uses the same `call_endpoint` path when `TINYBIRD_TOKEN` is present.
+People and the surgeon **evidence** model use Tinybird MCP (`https://mcp.tinybird.co`).
+Create a resource-scoped static token with READ on `flag_safety_check` and `cleanup_report`
+only; put it in `TINYBIRD_MCP_TOKEN` (wired into `stale-flags/agent` for the surgeon task).
+Scout and harness re-verify use `TINYBIRD_TOKEN` over REST, not MCP.
 
 ## Environment variables
 
@@ -249,8 +299,10 @@ See `.env.example`. Important ones:
 | Var | Purpose |
 |---|---|
 | `VITE_DATAFILE_URL` | Remote Featurevisor datafile URL |
-| `TINYBIRD_*` | Cloud ingest / pipe API / MCP |
-| `SCOUT_SOURCE` | `tinybird` / `mcp` for cloud scout |
+| `TINYBIRD_TOKEN` | REST for scout + surgeon harness |
+| `TINYBIRD_MCP_TOKEN` | Surgeon evidence MCP (READ on two pipes) |
+| `TINYBIRD_APPEND_TOKEN` | Event / decision log ingest |
+| `SCOUT_SOURCE` | `tinybird` for cloud scout (REST); omit/local for `.local-data` |
 | `BEDROCK_MODEL_ID` | Default Sonnet 4.5 inference profile |
 | `BEDROCK_DISABLED` | `1` forces heuristic surgeon edits |
 | `GITHUB_TOKEN` / `DEMO_BRANCH` | PRs against `demo` |
@@ -261,7 +313,7 @@ See `.env.example`. Important ones:
 ```bash
 SCOUT_SOURCE=tinybird pnpm agent:scout -- --dry-run
 pnpm agent:run
-pnpm agent:surgeon -- --flag=promo_banner_2025 --dry-run
+pnpm agent:surgeon -- --flag=search_ranking_v2 --dry-run
 pnpm demo:reset
 pnpm infra:agent-run
 ```
@@ -276,8 +328,11 @@ packages/local-store     Local NDJSON + Tinybird helpers
 featurevisor             Flag YAML
 tinybird                 Datasources + pipes
 tools/*                  seed, report, publish-*, reset
-agent/scout|surgeon      Background agent
+agent/scout|surgeon      Background agent (REST / MCP per PRD-07)
 infra                    AWS CDK (us-east-1)
 .github/workflows        publish-flags OIDC sync
 docs/qa-agent.md         Manual QA playbook
+docs/handoff-mcp-for-claude.md   Protocol handoff for article / Claude
+docs/captures/article-2026-10/   Real browser captures + INDEX
+prds/PRD-07-protocol-alignment.md
 ```

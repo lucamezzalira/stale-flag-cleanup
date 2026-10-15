@@ -19,11 +19,15 @@ if [[ -z "${GITHUB_TOKEN:-}" || -z "${TINYBIRD_TOKEN:-}" || -z "${TINYBIRD_APPEN
   exit 1
 fi
 
+if [[ -z "${TINYBIRD_MCP_TOKEN:-}" ]]; then
+  echo "warning: TINYBIRD_MCP_TOKEN unset; surgeon evidence narrative will be unavailable" >&2
+fi
+
 SECRET_NAME="stale-flags/agent"
 PAYLOAD=$(node -e '
 const keys = [
   "GITHUB_TOKEN","GITHUB_REPO","DEMO_BRANCH",
-  "TINYBIRD_API_HOST","TINYBIRD_APPEND_TOKEN","TINYBIRD_TOKEN","OLLAMA_DISABLED"
+  "TINYBIRD_API_HOST","TINYBIRD_APPEND_TOKEN","TINYBIRD_TOKEN","TINYBIRD_MCP_TOKEN","OLLAMA_DISABLED"
 ];
 const out = {};
 for (const k of keys) {

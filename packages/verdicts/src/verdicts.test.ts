@@ -147,7 +147,7 @@ function baseStore(overrides: Partial<EvidenceStore> = {}): EvidenceStore {
 }
 
 describe("runSafetyCheck", () => {
-  it("marks deprecated lifecycle flags safe_to_remove before live-build checks", () => {
+  it("marks quiet deprecated flags safe_to_remove via lifecycle after evidence checks", () => {
     const store = baseStore();
     const promo = runSafetyCheck(store, {
       flag_key: "promo_banner_2025",
@@ -157,6 +157,8 @@ describe("runSafetyCheck", () => {
     assert.equal(promo.route, "lifecycle");
     assert.equal(promo.collapse_direction, "delete_gated_branch");
 
+    // Heavy modern traffic with evaluating_share >= 0.5 still allows lifecycle
+    // once minority-build evidence has passed.
     const oneClick = runSafetyCheck(store, {
       flag_key: "one_click_buy",
       now,
@@ -164,6 +166,244 @@ describe("runSafetyCheck", () => {
     assert.equal(oneClick.verdict, "safe_to_remove");
     assert.equal(oneClick.route, "lifecycle");
     assert.equal(oneClick.collapse_direction, "keep_gated_branch");
+  });
+
+  it("blocks deprecated flags still evaluated by a live minority cohort", () => {
+    const store = baseStore({
+      definitions: [
+        ...baseStore().definitions,
+        def({
+          flag_key: "nav_winter_ribbon",
+          rollout_percentage: 100,
+          target_value: "true",
+          deprecated: 1,
+        }),
+      ],
+      activity: [
+        ...baseStore().activity,
+        {
+          day: "2026-09-01",
+          flag_key: "nav_winter_ribbon",
+          app: "web",
+          build_id: "b-sticky",
+          outcome: "evaluated",
+          variation: "true",
+          event_count: 300,
+        },
+      ],
+      firstSeen: {
+        ...baseStore().firstSeen!,
+        nav_winter_ribbon: "2025-01-01",
+      },
+    });
+    const row = runSafetyCheck(store, { flag_key: "nav_winter_ribbon", now });
+    assert.equal(row.verdict, "blocked");
+    assert.equal(row.route, "abandoned");
+    assert.match(row.reason, /deprecated/i);
+    assert.match(row.reason, /4%/);
+    assert.match(row.reason, /Deprecation makes a flag a candidate/);
+    const share = row.evidence.evaluating_share as number;
+    assert.ok(share > 0 && share <= 1.0001);
+    assert.equal(row.evidence.evaluating_share_pct, "4%");
+  });
+
+  it("marks deprecated flag with one evaluation and no live hits inconclusive", () => {
+    const store = baseStore({
+      definitions: [
+        ...baseStore().definitions,
+        def({
+          flag_key: "thin_deprecated_flag",
+          rollout_percentage: 0,
+          target_value: "false",
+          deprecated: 1,
+        }),
+      ],
+      activity: [
+        ...baseStore().activity,
+        {
+          day: "2026-09-01",
+          flag_key: "thin_deprecated_flag",
+          app: "web",
+          build_id: "b-dead",
+          outcome: "evaluated",
+          variation: "false",
+          event_count: 1,
+        },
+      ],
+      firstSeen: {
+        ...baseStore().firstSeen!,
+        thin_deprecated_flag: "2025-01-01",
+      },
+    });
+    const row = runSafetyCheck(store, {
+      flag_key: "thin_deprecated_flag",
+      now,
+    });
+    assert.equal(row.verdict, "inconclusive");
+    assert.match(row.reason, /only 1/);
+  });
+
+  it("marks non-deprecated zero-evaluation flags safe via abandoned", () => {
+    const store = baseStore({
+      definitions: [
+        ...baseStore().definitions,
+        def({
+          flag_key: "listing_outlet_banner",
+          rollout_percentage: 0,
+          target_value: "false",
+          deprecated: 0,
+        }),
+      ],
+      firstSeen: {
+        ...baseStore().firstSeen!,
+        listing_outlet_banner: "2025-01-01",
+      },
+    });
+    const row = runSafetyCheck(store, {
+      flag_key: "listing_outlet_banner",
+      now,
+    });
+    assert.equal(row.verdict, "safe_to_remove");
+    assert.equal(row.route, "abandoned");
+    assert.equal(row.collapse_direction, "delete_gated_branch");
+  });
+
+  it("marks non-deprecated settled flags safe via settled with share in 0.5..1", () => {
+    const store = baseStore({
+      definitions: [
+        ...baseStore().definitions.filter((d) => d.flag_key !== "one_click_buy"),
+        def({
+          flag_key: "checkout_secure_seal",
+          rollout_percentage: 100,
+          target_value: "true",
+          deprecated: 0,
+        }),
+      ],
+      activity: [
+        ...baseStore().activity.filter((a) => a.flag_key !== "one_click_buy"),
+        {
+          day: "2026-09-01",
+          flag_key: "checkout_secure_seal",
+          app: "web",
+          build_id: "b-modern",
+          outcome: "evaluated",
+          variation: "true",
+          event_count: 5000,
+        },
+      ],
+      firstSeen: {
+        ...baseStore().firstSeen!,
+        checkout_secure_seal: "2025-01-01",
+      },
+    });
+    const row = runSafetyCheck(store, {
+      flag_key: "checkout_secure_seal",
+      now,
+    });
+    assert.equal(row.verdict, "safe_to_remove");
+    assert.equal(row.route, "settled");
+    assert.equal(row.collapse_direction, "keep_gated_branch");
+    const share = row.evidence.evaluating_share as number;
+    assert.ok(share >= 0.5 && share <= 1.0001);
+  });
+
+  it("keeps evaluating_share at most 1 when many builds evaluate", () => {
+    const adoption = [
+      {
+        snapshot_date: "2026-09-01",
+        app: "web",
+        build_id: "b1",
+        released_at: "2026-06-01T00:00:00Z",
+        active_sessions: 4000,
+        session_share: 0.4,
+      },
+      {
+        snapshot_date: "2026-09-01",
+        app: "web",
+        build_id: "b2",
+        released_at: "2026-07-01T00:00:00Z",
+        active_sessions: 3500,
+        session_share: 0.35,
+      },
+      {
+        snapshot_date: "2026-09-01",
+        app: "web",
+        build_id: "b3",
+        released_at: "2026-08-01T00:00:00Z",
+        active_sessions: 2500,
+        session_share: 0.25,
+      },
+      // older snapshots with high shares must not inflate the sum
+      {
+        snapshot_date: "2026-08-01",
+        app: "web",
+        build_id: "b1",
+        released_at: "2026-06-01T00:00:00Z",
+        active_sessions: 9000,
+        session_share: 0.9,
+      },
+      {
+        snapshot_date: "2026-08-01",
+        app: "web",
+        build_id: "b2",
+        released_at: "2026-07-01T00:00:00Z",
+        active_sessions: 8000,
+        session_share: 0.8,
+      },
+    ];
+    const store = baseStore({
+      definitions: [
+        ...baseStore().definitions.filter((d) => d.flag_key !== "one_click_buy"),
+        def({
+          flag_key: "checkout_secure_seal",
+          rollout_percentage: 100,
+          target_value: "true",
+          deprecated: 0,
+        }),
+      ],
+      activity: [
+        {
+          day: "2026-09-01",
+          flag_key: "checkout_secure_seal",
+          app: "web",
+          build_id: "b1",
+          outcome: "evaluated",
+          variation: "true",
+          event_count: 2000,
+        },
+        {
+          day: "2026-09-01",
+          flag_key: "checkout_secure_seal",
+          app: "web",
+          build_id: "b2",
+          outcome: "evaluated",
+          variation: "true",
+          event_count: 2000,
+        },
+        {
+          day: "2026-09-01",
+          flag_key: "checkout_secure_seal",
+          app: "web",
+          build_id: "b3",
+          outcome: "evaluated",
+          variation: "true",
+          event_count: 2000,
+        },
+      ],
+      adoption,
+      firstSeen: {
+        ...baseStore().firstSeen!,
+        checkout_secure_seal: "2025-01-01",
+      },
+    });
+    const row = runSafetyCheck(store, {
+      flag_key: "checkout_secure_seal",
+      now,
+    });
+    const share = row.evidence.evaluating_share as number;
+    assert.ok(share <= 1.0001, `evaluating_share=${share}`);
+    assert.ok(share >= 0.5);
+    assert.equal(row.evidence.evaluating_share_pct, "100%");
   });
 
   it("returns inconclusive for parent-gated before descendant blocking", () => {
@@ -204,13 +444,15 @@ describe("runSafetyCheck", () => {
     assert.match(redesign.reason, /b-sticky/);
   });
 
-  it("returns inconclusive for thin evidence", () => {
+  it("returns inconclusive for thin evidence before minority blocking", () => {
     const store = baseStore();
+    // 8 evaluated events on a live build → thin evidence wins over share < 0.5
     const sparse = runSafetyCheck(store, {
       flag_key: "search_ranking_v2",
       now,
     });
     assert.equal(sparse.verdict, "inconclusive");
+    assert.match(sparse.reason, /only 8/);
   });
 
   it("returns inconclusive when firstSeen is inside the window", () => {

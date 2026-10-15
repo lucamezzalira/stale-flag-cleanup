@@ -97,6 +97,69 @@
         }
       ],
       "hash": "Uu3I8IBZOF"
+    },
+    "loyalty_stamp_banner": {
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 0
+        }
+      ],
+      "hash": "Whqth7j0rI"
+    },
+    "search_typo_suggest": {
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 100000
+        }
+      ],
+      "hash": "n5nPNCyzgz"
+    },
+    "size_guide_panel": {
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 0
+        }
+      ],
+      "hash": "TAFcMJi2ud"
+    },
+    "catalog_clearance_rail": {
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 0
+        }
+      ],
+      "hash": "Pi3ugRFgn2"
+    },
+    "checkout_trust_badges": {
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 100000
+        }
+      ],
+      "hash": "gKD1fsw3Yc"
+    },
+    "nav_winter_ribbon": {
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 100000
+        }
+      ],
+      "hash": "O3kJYbJqG0"
+    },
+    "listing_outlet_banner": {
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 0
+        }
+      ],
+      "hash": "FjxMbNI7T0"
     }
   }
 }

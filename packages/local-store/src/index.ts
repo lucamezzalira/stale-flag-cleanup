@@ -93,7 +93,34 @@ export async function loadStore(): Promise<
   return { definitions, activity, adoption, decisions, firstSeen };
 }
 
+async function loadDotEnvOnce(): Promise<void> {
+  if ((globalThis as { __staleFlagsDotEnv?: boolean }).__staleFlagsDotEnv) return;
+  (globalThis as { __staleFlagsDotEnv?: boolean }).__staleFlagsDotEnv = true;
+  try {
+    const envPath = path.resolve(dataDir, "../.env");
+    const raw = await readFile(envPath, "utf8");
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq <= 0) continue;
+      const key = trimmed.slice(0, eq).trim();
+      let val = trimmed.slice(eq + 1).trim();
+      if (
+        (val.startsWith('"') && val.endsWith('"')) ||
+        (val.startsWith("'") && val.endsWith("'"))
+      ) {
+        val = val.slice(1, -1);
+      }
+      if (process.env[key] === undefined) process.env[key] = val;
+    }
+  } catch {
+    /* no .env */
+  }
+}
+
 async function resolveAdminToken(host: string): Promise<string> {
+  await loadDotEnvOnce();
   if (process.env.TINYBIRD_ADMIN_TOKEN) return process.env.TINYBIRD_ADMIN_TOKEN;
   // Workspace admin token lives in .tinyb after `tb login` (not the scoped endpoint_read token).
   try {
@@ -179,11 +206,19 @@ export async function ingestToTinybird(
   name: string,
   rows: object[],
 ): Promise<void> {
+  await loadDotEnvOnce();
   const host =
     process.env.TINYBIRD_API_HOST ?? "https://api.us-east.aws.tinybird.co";
   const token =
     process.env.TINYBIRD_APPEND_TOKEN ?? process.env.TINYBIRD_TOKEN ?? "";
-  if (!token || rows.length === 0) return;
+  if (!token || rows.length === 0) {
+    if (rows.length > 0 && !token) {
+      console.warn(
+        `Skip Tinybird ingest ${name}: no TINYBIRD_APPEND_TOKEN / TINYBIRD_TOKEN`,
+      );
+    }
+    return;
+  }
   const chunk = 500;
   for (let i = 0; i < rows.length; i += chunk) {
     const body = rows

@@ -25,13 +25,22 @@ worth showing only exist while the system is in a particular state.
 - [ ] `pnpm report --flag wishlist` showing the living descendants
 - [ ] `pnpm report --flag wishlist_sharing` showing blocked events and zero evaluations
 
-### The two removals, which prove the direction matters
+### The removals, which prove the direction matters
 
-- [ ] Permalink to the `promo_banner_2025` pull request, with the diff visible
-- [ ] Permalink to the `one_click_buy` pull request, with the diff visible
-- [ ] A side by side of the two diffs showing one deleting the gated branch and the other
-      keeping it. This is what proves the agent read the rollout state rather than guessing
-- [ ] The pull request body, showing the reason, evidence and run id
+Historical first pair (CodeBuild-era, already merged):
+
+- [x] Permalink to `#5` (`one_click_buy`, keep_gated) and `#6` (`promo_banner_2025`,
+      delete_gated)
+
+Production E2E pairs (Fargate, one multi-flag PR):
+
+- [x] Permalink to `#9` covering `express_pay_hint` + `loyalty_stamp_banner`, with YAML +
+      app diffs (not REVISION-only). Fail any capture that is REVISION-only (`#7`/`#8` closed
+      as false greens)
+- [x] Permalink to `#11` covering `search_typo_suggest` + `size_guide_panel`, with YAML +
+      app diffs, Decision (REST) + Evidence (MCP) PR body (`4541b483-…`)
+- [x] Side by side UI before/after: captures `16`–`19` under `docs/captures/article-2026-10/`
+- [x] PR body Decision + Evidence: capture `20-pr11-body-decision-evidence.png`
 
 Use permalinks to a specific commit, not branch links, because `demo:reset` will move the
 branch.
@@ -39,18 +48,19 @@ branch.
 ### The data, which proves it is not staged
 
 - [ ] A chart of daily events per flag across the window, showing diurnal and weekly shape
-- [ ] The same chart with `one_click_buy` visible as one of the busiest flags while still
-      being a removal candidate. This is the image that sells the settled case
+- [ ] The same chart with `search_typo_suggest` (or the current keep_gated safe) visible as one
+      of the busiest flags while still being a removal candidate
 - [ ] A row count and a screenshot of the Tinybird datasource after seeding
 
 ### The mechanism
 
-- [ ] The two endpoint definitions, as code, specifically the verdict logic in SQL. This is
-      the thing the argument rests on and it should appear in the article verbatim
+- [ ] The endpoint definitions, as code, specifically the verdict logic in SQL (`cleanup_report`
+      / `flag_safety_check`). This is the thing the argument rests on
 - [ ] The MCP conversation where a developer asks which flags are queued tonight and gets
       the answer with reasons
-- [ ] `cleanup_decisions` after a run, showing eight rows with their reasons
-- [ ] A screenshot or short recording of the scheduled run firing, for the unattended claim
+- [ ] `cleanup_decision_log` after a run, showing rows for every candidate including refusals
+- [ ] Step Functions execution + S3 `plan.json` / `surgeon-result.json` for the unattended
+      Fargate claim (EventBridge → SFN → scout → one surgeon → one PR)
 
 ### The failure case
 

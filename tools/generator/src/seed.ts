@@ -98,10 +98,10 @@ async function main(): Promise<void> {
 
   console.log(`Seeding ${days} days with seed=${seed}…`);
 
-  // Weekly builds; one sticky old build ~90d ago retaining 2–4% share
+  // Weekly builds; one sticky old build before the window retaining 2–4% share
   const builds: Array<{ id: string; released: Date }> = [];
   const stickyReleased = new Date(now);
-  stickyReleased.setUTCDate(stickyReleased.getUTCDate() - Math.min(days, 90) + 5);
+  stickyReleased.setUTCDate(stickyReleased.getUTCDate() - Math.min(days, 90) - 15);
   const stickyId = `${dayString(stickyReleased)}.oldcafe1`;
   builds.push({ id: stickyId, released: stickyReleased });
 
@@ -193,9 +193,28 @@ async function main(): Promise<void> {
       const isSticky = b.id === stickyId;
       const isModern = !isSticky;
 
-      // one_click_buy: heavy settled traffic on modern builds
+      // checkout_secure_seal: heavy settled traffic on modern builds (keep_gated, not deprecated)
       if (isModern) {
-        bump(ds, "one_click_buy", b.id, "evaluated", "true", buildSessions * 3);
+        bump(
+          ds,
+          "checkout_secure_seal",
+          b.id,
+          "evaluated",
+          "true",
+          buildSessions * 3,
+        );
+      }
+
+      // nav_winter_ribbon: sticky old build only (deprecated but live minority → blocked)
+      if (isSticky) {
+        bump(
+          ds,
+          "nav_winter_ribbon",
+          b.id,
+          "evaluated",
+          "true",
+          Math.floor(200 + rng() * 100),
+        );
       }
 
       // shipping_estimator: 60/40 split on modern
@@ -253,18 +272,24 @@ async function main(): Promise<void> {
         );
       }
 
-      // promo_banner: only before window (handled outside) — none inside
+      // listing_outlet_banner: only before window (abandoned / delete_gated, not deprecated)
       // search_ranking_v2: sparse — sprinkle later
     }
   }
 
-  // promo_banner_2025: activity ending before window
+  // Pre-window activity so first_seen does not sit inside the quiet window and
+  // preempt live-minority / abandoned / settled rules after the reorder.
   for (let offset = days + 40; offset > days + 5; offset--) {
     const day = new Date(now);
     day.setUTCDate(day.getUTCDate() - offset);
     const ds = dayString(day);
     const b = builds[0]!;
-    bump(ds, "promo_banner_2025", b.id, "evaluated", "false", 50);
+    bump(ds, "listing_outlet_banner", b.id, "evaluated", "false", 50);
+    bump(ds, "checkout_redesign", stickyId, "evaluated", "true", 40);
+    bump(ds, "nav_winter_ribbon", stickyId, "evaluated", "true", 40);
+    const modern = builds.filter((x) => x.id !== stickyId);
+    const m = modern[0] ?? builds[0]!;
+    bump(ds, "checkout_secure_seal", m.id, "evaluated", "true", 80);
   }
 
   // search_ranking_v2: 5–15 evaluated across whole window
@@ -301,8 +326,14 @@ async function main(): Promise<void> {
   const report = cleanupReport(store, { window_days: days });
   console.log("\nVerdict matrix after seed:");
   for (const row of report) {
+    const share = Number(row.evidence.evaluating_share ?? 0);
+    if (share > 1.0001) {
+      throw new Error(
+        `evaluating_share out of range for ${row.flag_key}: ${share}`,
+      );
+    }
     console.log(
-      `  ${row.flag_key.padEnd(24)} ${row.verdict.padEnd(16)} ${row.collapse_direction.padEnd(20)} ${row.route}`,
+      `  ${row.flag_key.padEnd(24)} ${row.verdict.padEnd(16)} ${row.collapse_direction.padEnd(20)} ${row.route}  share=${share.toFixed(3)}`,
     );
   }
   console.log(`\nRows: activity=${activity.length} adoption=${adoption.length} defs=${definitions.length}`);

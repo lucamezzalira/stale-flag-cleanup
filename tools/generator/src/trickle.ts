@@ -31,11 +31,21 @@ async function main(): Promise<void> {
       });
     };
 
-    add("one_click_buy", "evaluated", "true", 3 + Math.floor(rng() * 5));
-    add("wishlist", "evaluated", "false", 1);
-    add("wishlist_sharing", "blocked_by_parent", "", 1);
+    const liveKeys = new Set(store.definitions.map((d) => d.flag_key));
+    const maybeAdd = (
+      flag: string,
+      outcome: string,
+      variation: string,
+      n: number,
+    ) => {
+      if (!liveKeys.has(flag)) return;
+      add(flag, outcome, variation, n);
+    };
+
+    maybeAdd("wishlist", "evaluated", "false", 1);
+    maybeAdd("wishlist_sharing", "blocked_by_parent", "", 1);
     if (rng() > 0.4) {
-      add(
+      maybeAdd(
         "shipping_estimator",
         "evaluated",
         rng() > 0.4 ? "estimate_compact" : "estimate_detailed",

@@ -10,9 +10,6 @@ importers:
 
   agent/scout:
     dependencies:
-      '@modelcontextprotocol/sdk':
-        specifier: ^1.17.0
-        version: 1.32.1(zod@4.6.5)
       '@stale-flags/local-store':
         specifier: workspace:*
         version: link:../../packages/local-store
@@ -35,6 +32,9 @@ importers:
       '@aws-sdk/client-bedrock-runtime':
         specifier: ^3.873.0
         version: 3.1152.0
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.17.0
+        version: 1.32.1(zod@4.6.5)
       '@stale-flags/local-store':
         specifier: workspace:*
         version: link:../../packages/local-store

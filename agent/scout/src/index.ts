@@ -47,12 +47,11 @@ function useTinybird(): boolean {
   return Boolean(
     process.env.TINYBIRD_TOKEN &&
       (process.env.SCOUT_SOURCE === "tinybird" ||
-        process.env.SCOUT_SOURCE === "mcp" ||
-        process.env.AWS_EXECUTION_ENV ||
-        process.env.CODEBUILD_BUILD_ID),
+        process.env.AWS_EXECUTION_ENV),
   );
 }
 
+/** Deterministic code talks to Tinybird over REST only. Non-2xx is a hard failure. */
 async function callTinybirdEndpoint<T>(
   endpointName: string,
   params: Record<string, string | number> = {},
@@ -62,40 +61,6 @@ async function callTinybirdEndpoint<T>(
   const token = process.env.TINYBIRD_TOKEN ?? "";
   if (!token) throw new Error("TINYBIRD_TOKEN is required for Tinybird mode");
 
-  // Prefer Tinybird MCP Streamable HTTP (call_endpoint). Fall back to REST pipes.
-  try {
-    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
-    const { StreamableHTTPClientTransport } = await import(
-      "@modelcontextprotocol/sdk/client/streamableHttp.js"
-    );
-    const url = new URL("https://mcp.tinybird.co");
-    url.searchParams.set("token", token);
-    url.searchParams.set("host", host);
-    const transport = new StreamableHTTPClientTransport(url);
-    const client = new Client({ name: "stale-flags-scout", version: "0.1.0" });
-    await client.connect(transport);
-    try {
-      const result = await client.callTool({
-        name: "call_endpoint",
-        arguments: {
-          endpoint_name: endpointName,
-          params,
-          response_format: "JSON",
-        },
-      });
-      const text = extractMcpText(result);
-      const parsed = JSON.parse(text) as { data?: T[] } | T[];
-      if (Array.isArray(parsed)) return parsed;
-      return parsed.data ?? [];
-    } finally {
-      await client.close().catch(() => undefined);
-    }
-  } catch (err) {
-    console.warn(
-      `Tinybird MCP call_endpoint failed (${err instanceof Error ? err.message : err}); falling back to REST`,
-    );
-  }
-
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) qs.set(k, String(v));
   const res = await fetch(
@@ -104,44 +69,17 @@ async function callTinybirdEndpoint<T>(
   );
   const text = await res.text();
   if (!res.ok) {
+    console.log(
+      `tinybird_rest endpoint=${endpointName} status=${res.status} rows=0`,
+    );
     throw new Error(`Tinybird pipe ${endpointName}: ${res.status} ${text}`);
   }
   const json = JSON.parse(text) as { data: T[] };
-  return json.data ?? [];
-}
-
-function extractMcpText(result: unknown): string {
-  const r = result as {
-    content?: Array<{ type?: string; text?: string }>;
-    structuredContent?: unknown;
-  };
-  if (typeof r.structuredContent === "object" && r.structuredContent) {
-    return JSON.stringify(r.structuredContent);
-  }
-  const text = (r.content ?? [])
-    .filter((c) => c.type === "text" && c.text)
-    .map((c) => c.text!)
-    .join("\n");
-  if (!text) throw new Error("Empty MCP call_endpoint response");
-  // MCP sometimes wraps or appends prose; pull the first JSON object/array.
-  const start = text.search(/[\{\[]/);
-  if (start === -1) return text;
-  const slice = text.slice(start);
-  try {
-    JSON.parse(slice);
-    return slice;
-  } catch {
-    // Walk braces to find a parseable prefix
-    for (let end = slice.length; end > 1; end--) {
-      try {
-        JSON.parse(slice.slice(0, end));
-        return slice.slice(0, end);
-      } catch {
-        /* continue */
-      }
-    }
-  }
-  return text;
+  const rows = json.data ?? [];
+  console.log(
+    `tinybird_rest endpoint=${endpointName} status=${res.status} rows=${rows.length}`,
+  );
+  return rows;
 }
 
 function shouldSkip(
@@ -249,10 +187,15 @@ async function main(): Promise<void> {
   const argv = process.argv.filter((a) => a !== "--");
   const dryRun = argv.includes("--dry-run") || !argv.includes("--full");
   const full = argv.includes("--full");
+  const emitJson = argv.includes("--emit-json");
+  const noDispatch =
+    argv.includes("--no-dispatch") ||
+    emitJson ||
+    process.env.AGENT_ORCHESTRATOR === "stepfunctions";
   const tinybird = useTinybird() || argv.includes("--tinybird");
   const id = runId();
   console.log(
-    `Scout run_id=${id} dryRun=${dryRun || !full} source=${tinybird ? "tinybird-mcp" : "local"}\n`,
+    `Scout run_id=${id} dryRun=${dryRun || !full} source=${tinybird ? "tinybird-rest" : "local"} dispatch=${!noDispatch}\n`,
   );
 
   const localMeta = tinybird ? null : await loadFromLocal();
@@ -303,31 +246,35 @@ async function main(): Promise<void> {
     datafile_revision: r.datafile_revision ?? "",
   }));
 
+  const safe = results.filter(
+    (r) =>
+      r.verdict === "safe_to_remove" && r.collapse_direction !== "none",
+  );
+
   if (dryRun || !full) {
     console.log(
       `\nProposed surgeon actions: ${
-        results
-          .filter(
-            (r) =>
-              r.verdict === "safe_to_remove" &&
-              r.collapse_direction !== "none",
-          )
-          .map((r) => r.flag_key)
-          .join(", ") || "(none)"
+        safe.map((r) => r.flag_key).join(", ") || "(none)"
       }`,
     );
     console.log(
       "Re-run with --full to write cleanup_decision_log and dispatch surgeons.",
     );
+    if (emitJson) writeOrchestratorOutput(id, results, safe);
     return;
   }
 
   await appendDecisions(decisions);
 
-  for (const r of results) {
-    if (r.verdict !== "safe_to_remove" || r.collapse_direction === "none") {
-      continue;
-    }
+  if (emitJson || noDispatch) {
+    writeOrchestratorOutput(id, results, safe);
+    console.log(
+      `\nOrchestrator mode: wrote ${safe.length} candidate(s); skipping in-process surgeon dispatch.`,
+    );
+    return;
+  }
+
+  for (const r of safe) {
     const payload = Buffer.from(JSON.stringify({ ...r, run_id: id })).toString(
       "base64url",
     );
@@ -347,6 +294,65 @@ async function main(): Promise<void> {
       console.error(`Surgeon failed for ${r.flag_key}`);
     }
   }
+}
+
+function writeOrchestratorOutput(
+  runIdValue: string,
+  results: SafetyCheckResult[],
+  safe: SafetyCheckResult[],
+): void {
+  // Independently safe only (already filtered). Leaf-first among parent edges
+  // when present; no inventing inconclusive children onto the plan.
+  const byKey = new Map(safe.map((r) => [r.flag_key, r]));
+  const parentOf = (r: SafetyCheckResult): string =>
+    String(r.evidence?.parent_key ?? "");
+  const sorted = [...safe].sort((a, b) => {
+    const aParent = parentOf(a);
+    const bParent = parentOf(b);
+    if (aParent && byKey.has(aParent) && aParent === b.flag_key) return -1;
+    if (bParent && byKey.has(bParent) && bParent === a.flag_key) return 1;
+    return a.flag_key.localeCompare(b.flag_key);
+  });
+  const out = {
+    run_id: runIdValue,
+    branch_name: `agent/cleanup-${runIdValue}`,
+    candidates: sorted.map((r) => ({
+      flag_key: r.flag_key,
+      verdict: r.verdict,
+      route: r.route,
+      collapse_direction: r.collapse_direction,
+      target_value: r.target_value,
+      reason: r.reason,
+      datafile_revision: r.datafile_revision ?? "",
+      parent_key: parentOf(r),
+      payload_b64: Buffer.from(
+        JSON.stringify({ ...r, run_id: runIdValue }),
+      ).toString("base64url"),
+    })),
+    skipped: results
+      .filter((r) => !safe.some((s) => s.flag_key === r.flag_key))
+      .map((r) => ({
+        flag_key: r.flag_key,
+        verdict: r.verdict,
+        route: r.route,
+      })),
+  };
+  const json = `${JSON.stringify(out)}\n`;
+  const dest = process.env.RESULT_S3_URI;
+  if (dest?.startsWith("s3://")) {
+    const put = spawnSync("aws", ["s3", "cp", "-", dest], {
+      input: json,
+      encoding: "utf8",
+      cwd: root,
+    });
+    if (put.status !== 0) {
+      throw new Error(
+        `Failed to write scout result to ${dest}: ${put.stderr || put.stdout}`,
+      );
+    }
+    console.log(`Wrote scout result to ${dest}`);
+  }
+  console.log(`ORCHESTRATOR_JSON:${JSON.stringify(out)}`);
 }
 
 main().catch((err) => {

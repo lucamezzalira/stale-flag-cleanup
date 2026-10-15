@@ -11,8 +11,8 @@ export function CheckoutPage() {
         <div>
           <h1>{redesign.enabled ? "Checkout" : "Checkout (classic)"}</h1>
           <p>
-            Three flags on one path: layout, purchase CTA, and shipping
-            estimate variation.
+            Layout, purchase CTA hint, and shipping estimate variation on one
+            path.
           </p>
         </div>
       </div>
@@ -37,7 +37,14 @@ export function CheckoutPage() {
               <button type="button" className="btn">
                 One-click buy
               </button>
+              <p className="muted" style={{ marginTop: "0.5rem" }}>
+                Express pay hint: skip the address book.
+              </p>
             </div>
+            <p className="muted" style={{ marginTop: "0.75rem" }}>
+              Secure seal: encrypted checkout · Free returns · Carbon-neutral
+              ship
+            </p>
           </section>
 
           <section className="panel">

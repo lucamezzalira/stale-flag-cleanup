@@ -26,6 +26,13 @@ export function SearchPage() {
         </div>
       </div>
 
+      <div className="banner" style={{ marginBottom: "1rem" }}>
+        <div>
+          <strong>Did you mean Classic Tee?</strong>
+          <span>Typo suggest chip for near-miss queries.</span>
+        </div>
+      </div>
+
       <FlagCallout
         flagKey="search_ranking_v2"
         enabled={ranking.enabled}
@@ -43,8 +50,7 @@ export function SearchPage() {
             <div className="product-body">
               <h2>{p.name}</h2>
               <p className="muted">
-                Rank score{" "}
-                {ranking.enabled ? p.scoreV2 : p.scoreV1}
+                Rank score {ranking.enabled ? p.scoreV2 : p.scoreV1}
               </p>
             </div>
           </article>

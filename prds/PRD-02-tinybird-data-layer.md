@@ -81,18 +81,23 @@ This endpoint does not decide anything. It narrows the list.
 
 ## Endpoint 2: `flag_safety_check`
 
-This is the core of the PoC.
+This is the core of the PoC. Scout planning today uses `cleanup_report` (same rules over
+every flag) plus `flag_candidates`; this endpoint is the single-flag form of the same
+ordered check (CLI / MCP / surgeon re-check).
 
 Parameters:
 
-- `flag_key` (String, required)
+- `key` (String, required). The flag key. Named `key`, not `flag_key`, and activity SQL must
+  qualify `flag_daily_activity.flag_key` (table alias). Selecting `… AS flag_key` next to an
+  unqualified `WHERE flag_key = …` makes ClickHouse bind WHERE to the SELECT alias and return
+  workspace-wide event totals.
 - `window_days` (Int, default 90)
 - `min_session_share` (Float, default 0.005)
 - `min_events_for_settled` (Int, default 1000)
 - `environment` (String, default `production`)
 
 Returns a single row: `flag_key`, `verdict`, `reason`, `target_value`, `collapse_direction`
-and an `evidence` object.
+and evidence fields.
 
 ### Verdict rules, evaluated in this order
 
@@ -100,37 +105,38 @@ and an `evidence` object.
    return `blocked` with a reason stating the flag is no longer in the project and there is
    nothing to remove. This stops the system proposing a deletion it already made.
 
-2. **Living descendants.** Resolve the dependency tree from the latest snapshot. If this flag
-   has any descendant that is not archived, return `blocked` with a reason naming those
-   descendants and stating that removal must proceed bottom up. This rule fires before any
-   traffic analysis, because the dependency problem is not a traffic problem.
+2. **Gated by a parent.** If the flag has a parent, and the window contains
+   `blocked_by_parent` events but no `evaluated` events, return `inconclusive` with a reason
+   stating that the flag was never reached because the parent gated every lookup, that the
+   absence of evaluations is therefore not evidence of disuse, and that the parent's rollout
+   state must be resolved first. Include the blocked event count. This fires before the
+   descendant rule so wishlist children are not mislabeled as blocked-for-descendants.
 
-3. **No single target value.** If `target_value` is empty in the latest snapshot, meaning the
+3. **Living descendants.** Resolve the dependency tree from the latest snapshot. If this flag
+   has any descendant that is not archived, return `blocked` with a reason naming those
+   descendants and stating that removal must proceed bottom up.
+
+4. **No single target value.** If `target_value` is empty in the latest snapshot, meaning the
    rollout sits strictly between 0 and 100 or weight is spread across more than one
    variation, return `blocked` with a reason stating the rollout percentage, that the flag
    is mid-ramp, and that the rollout must be completed or rolled back before the code can be
    collapsed. There is no safe value to inline, so nothing else about the flag matters.
 
-4. **Active on a live build.** Join evaluated events in the window against `build_adoption`.
-   If any build with `session_share >= min_session_share` produced `evaluated` events, return
-   `blocked` with a reason naming the build, its release date, its session share and the
-   daily event count. This is the stale bundle case, and it applies to the abandoned route
-   only, since a settled flag is active everywhere by definition.
+5. **Deprecated / archived with a single target.** Lifecycle route: if the definition is
+   deprecated or archived and `target_value` is non-empty, return `safe_to_remove` with the
+   matching collapse direction. This is how the E2E fixtures qualify without requiring the
+   scout to invent eligibility.
 
-5. **Gated by a parent.** If the flag has a parent, and the window contains
-   `blocked_by_parent` events but no `evaluated` events, return `inconclusive` with a reason
-   stating that the flag was never reached because the parent gated every lookup, that the
-   absence of evaluations is therefore not evidence of disuse, and that the parent's rollout
-   state must be resolved first. Include the blocked event count.
+6. **Active on a live minority build.** Join evaluated events in the window against
+   `build_adoption`. If evaluating share from live builds is below the settled threshold,
+   return `blocked` (stale bundle / sticky old build).
 
-6. **Insufficient evidence.** If total events in the window are above zero but below a
+7. **Insufficient evidence.** If total events in the window are above zero but below a
    configurable floor, or the flag's first ever event is inside the window, return
    `inconclusive` with a reason stating the evidence is too thin to support a decision.
 
-7. **Safe.** Only if none of the above apply, return `safe_to_remove` with a reason stating
-   which route qualified it, the window searched, the number of builds checked, and either
-   the last time the flag was ever evaluated (abandoned) or the number of evaluations that
-   all returned the same value (settled).
+8. **Safe (abandoned / settled).** Only if none of the above apply, return `safe_to_remove`
+   with a reason stating which route qualified it.
 
 ### Target value and collapse direction
 
@@ -177,18 +183,17 @@ It must be readable as a table. Keep the column count low and put the detail in 
 
 ## Acceptance criteria
 
-Against the seeded dataset from PRD-03:
+Against the seeded dataset from PRD-03 (with removable fixtures present):
 
-- `flag_candidates` returns all eight flags, with `route` set to `settled` for
-  `one_click_buy` and `shipping_estimator` and `abandoned` for the rest
-- `flag_safety_check` returns `safe_to_remove` for exactly `promo_banner_2025` and
-  `one_click_buy`
-- `promo_banner_2025` returns `collapse_direction: delete_gated_branch`
-- `one_click_buy` returns `collapse_direction: keep_gated_branch`
-- `checkout_redesign` returns `blocked` naming the old build, its session share and its
-  daily evaluation count
-- `shipping_estimator` returns `blocked` for the partial rollout, naming the percentage,
-  with `collapse_direction: none`
+- `flag_candidates` / `cleanup_report` return all eight flags
+- Independently `safe_to_remove` with a real collapse (latest E2E): `size_guide_panel`
+  (`delete_gated_branch`) and `search_typo_suggest` (`keep_gated_branch`). No hardcoded
+  two-key allowlist in scout or pipes. Earlier: `loyalty_stamp_banner` / `express_pay_hint`
+- `flag_safety_check?key=…` matches `cleanup_report` for the same key (per-flag event
+  counts, not workspace totals)
+- `checkout_redesign` returns `blocked` naming the sticky live-build minority
+- `shipping_estimator` returns `blocked` for the partial rollout, with
+  `collapse_direction: none`
 - `wishlist` returns `blocked` naming its two living descendants
 - `wishlist_sharing` and `wishlist_sharing_qr` return `inconclusive` with the parent gating
   reason and a blocked event count above zero

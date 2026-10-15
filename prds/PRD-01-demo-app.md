@@ -24,10 +24,12 @@ scheme:
 - `wishlist_sharing` declares `requiredFeatures: wishlist`
 - `wishlist_sharing_qr` declares `requiredFeatures: wishlist_sharing`
 
-Rollout state in the `production` environment, which must match the table in PRD-00:
+Rollout state in the `production` environment, which must match the table in PRD-00
+(when the removable fixtures are present on the branch):
 
-- `promo_banner_2025`: 0%
-- `one_click_buy`: 100%
+- `size_guide_panel`: 0% after kill (delete_gated E2E fixture; deprecated). Ship at 100%
+  briefly for BEFORE UI screenshots, then deprecate at 0% before seed/agent
+- `search_typo_suggest`: 100% (keep_gated E2E fixture; deprecated)
 - `checkout_redesign`: 100%
 - `shipping_estimator`: 60%, with two variations so the split is real
 - `wishlist`: 0% for the whole window, which is what gates the children
@@ -104,12 +106,14 @@ the demo can be made chatty or quiet.
 React with Vite, client side rendering, no framework beyond that. Enough surface to make
 each flag meaningful:
 
-- A product listing page where `promo_banner_2025` would have shown a banner
-- A checkout page gated by `checkout_redesign`, with `one_click_buy` on the same path and
-  `shipping_estimator` selecting between two estimate presentations
+- A product listing page where `size_guide_panel` shows a Size guide panel (delete_gated
+  fixture; unique copy so AFTER CDN QA can prove collapse)
+- A checkout page gated by `checkout_redesign`, with `shipping_estimator` selecting between
+  two estimate presentations
 - A wishlist section gated by `wishlist`, containing a share action gated by
   `wishlist_sharing`, containing a QR option gated by `wishlist_sharing_qr`
-- A search results page where `search_ranking_v2` selects the ordering
+- A search results page where `search_ranking_v2` selects the ordering and
+  `search_typo_suggest` shows a “Did you mean…” chip (keep_gated fixture)
 
 Every one of these reads its flag through the wrapper. No direct SDK calls anywhere in the
 application code.
