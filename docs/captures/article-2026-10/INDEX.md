@@ -18,14 +18,19 @@ Real browser / Terminal captures only. No invented HTML mock UIs.
 | 12 | cleanup_report (MCP call_endpoint) | `12-mcp-queued.png` | Live Tinybird `cleanup_report` JSON |
 | 13 | Tinybird endpoint + params | *(missing)* | Needs signed-in Tinybird Cloud |
 | 14 | Green Step Functions graph | *(missing)* | Needs signed-in AWS console |
+| 15 | PR body Decision (harness) + Evidence (MCP) | `15-pr10-body-decision-evidence.png` | GitHub PR #10 conversation |
 
 ## Still need you signed in
 
+Shots 13 and 14 still need signed-in Tinybird Cloud + AWS console.
+
 1. Tinybird Cloud: https://cloud.tinybird.co/aws/us-east-1/featureflags/pipes/flag_safety_check
-2. AWS SFN: https://us-east-1.console.aws.amazon.com/states/home?region=us-east-1#/v2/executions/details/arn:aws:states:us-east-1:661975750538:execution:stale-flags-cleanup:3a325f3c-73bd-424f-9626-188c651b9bc3
+2. AWS SFN (PRD-07 cloud run): https://us-east-1.console.aws.amazon.com/states/home?region=us-east-1#/v2/executions/details/arn:aws:states:us-east-1:661975750538:execution:stale-flags-cleanup:41023cbe-7fbd-46f5-90f5-c40fd5aa3dd4
 
 Browser automation hit the login walls for both. Sign in in the Cursor browser tab and say go for 13–14.
 
 Deep links:
 - Live shop: https://dj37uarwx2jpn.cloudfront.net/
 - Datafile: https://d1jcup3snfgsrs.cloudfront.net/featurevisor/production/featurevisor-all.json
+- PR #10 (Decision + Evidence): https://github.com/lucamezzalira/stale-flag-cleanup/pull/10
+- SFN execution `41023cbe-7fbd-46f5-90f5-c40fd5aa3dd4`: https://us-east-1.console.aws.amazon.com/states/home?region=us-east-1#/v2/executions/details/arn:aws:states:us-east-1:661975750538:execution:stale-flags-cleanup:41023cbe-7fbd-46f5-90f5-c40fd5aa3dd4
