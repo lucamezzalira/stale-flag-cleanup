@@ -5,19 +5,19 @@ NODE latest_def
 SQL >
     %
     SELECT
-        flag_key,
-        argMax(parent_key, captured_at) AS parent_key,
-        argMax(rollout_percentage, captured_at) AS rollout_percentage,
-        argMax(target_value, captured_at) AS target_value,
-        argMax(variation_count, captured_at) AS variation_count,
-        argMax(deprecated, captured_at) AS deprecated,
-        argMax(archived, captured_at) AS archived,
-        argMax(datafile_revision, captured_at) AS datafile_revision,
+        fd.flag_key AS flag_key,
+        argMax(fd.parent_key, fd.captured_at) AS parent_key,
+        argMax(fd.rollout_percentage, fd.captured_at) AS rollout_percentage,
+        argMax(fd.target_value, fd.captured_at) AS target_value,
+        argMax(fd.variation_count, fd.captured_at) AS variation_count,
+        argMax(fd.deprecated, fd.captured_at) AS deprecated,
+        argMax(fd.archived, fd.captured_at) AS archived,
+        argMax(fd.datafile_revision, fd.captured_at) AS datafile_revision,
         count() AS def_rows
-    FROM flag_definitions
-    WHERE environment = {{ String(environment, 'production') }}
-      AND flag_key = {{ String(key) }}
-    GROUP BY flag_key
+    FROM flag_definitions AS fd
+    WHERE fd.environment = {{ String(environment, 'production') }}
+      AND fd.flag_key = {{ String(key) }}
+    GROUP BY fd.flag_key
 
 NODE all_defs
 SQL >
@@ -64,36 +64,36 @@ SQL >
     %
     SELECT
         {{ String(key) }} AS flag_key,
-        sumIf(event_count, outcome = 'evaluated') AS evaluated_events,
-        sumIf(event_count, outcome = 'blocked_by_parent') AS blocked_events,
-        uniqExactIf(variation, outcome = 'evaluated' AND variation != '') AS distinct_variations
-    FROM flag_daily_activity
-    WHERE flag_key = {{ String(key) }}
-      AND app = 'web'
-      AND day >= toDate(now() - toIntervalDay({{ Int32(window_days, 90) }}))
+        sumIf(fda.event_count, fda.outcome = 'evaluated') AS evaluated_events,
+        sumIf(fda.event_count, fda.outcome = 'blocked_by_parent') AS blocked_events,
+        uniqExactIf(fda.variation, fda.outcome = 'evaluated' AND fda.variation != '') AS distinct_variations
+    FROM flag_daily_activity AS fda
+    WHERE fda.flag_key = {{ String(key) }}
+      AND fda.app = 'web'
+      AND fda.day >= toDate(now() - toIntervalDay({{ Int32(window_days, 90) }}))
 
 NODE first_seen_all
 SQL >
     %
     SELECT
         {{ String(key) }} AS flag_key,
-        min(day) AS first_seen
-    FROM flag_daily_activity
-    WHERE flag_key = {{ String(key) }}
-      AND app = 'web'
+        min(fda.day) AS first_seen
+    FROM flag_daily_activity AS fda
+    WHERE fda.flag_key = {{ String(key) }}
+      AND fda.app = 'web'
 
 NODE eval_by_build
 SQL >
     %
     SELECT
-        build_id,
-        sum(event_count) AS evaluated_events
-    FROM flag_daily_activity
-    WHERE flag_key = {{ String(key) }}
-      AND app = 'web'
-      AND day >= toDate(now() - toIntervalDay({{ Int32(window_days, 90) }}))
-      AND outcome = 'evaluated'
-    GROUP BY build_id
+        fda.build_id AS build_id,
+        sum(fda.event_count) AS evaluated_events
+    FROM flag_daily_activity AS fda
+    WHERE fda.flag_key = {{ String(key) }}
+      AND fda.app = 'web'
+      AND fda.day >= toDate(now() - toIntervalDay({{ Int32(window_days, 90) }}))
+      AND fda.outcome = 'evaluated'
+    GROUP BY fda.build_id
     HAVING evaluated_events > 0
 
 NODE live_hits

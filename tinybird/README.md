@@ -14,4 +14,4 @@ tb deploy
 
 Scope endpoint tokens to `flag_candidates`, `flag_safety_check`, and `cleanup_report` for MCP / agent use.
 
-`flag_safety_check` takes query param `key` (the flag key). Do not name it `flag_key`: that collides with the column and turns `WHERE flag_key = …` into a tautology.
+`flag_safety_check` takes query param `key` (the flag key). Activity nodes must qualify `flag_daily_activity.flag_key` (table alias). Selecting `{{ String(key) }} AS flag_key` next to an unqualified `WHERE flag_key = …` makes ClickHouse bind WHERE to the SELECT alias, so the filter always matches and event counts become workspace-wide.
