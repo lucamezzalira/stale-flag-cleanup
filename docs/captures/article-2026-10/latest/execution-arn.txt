@@ -1,0 +1,1 @@
+arn:aws:states:us-east-1:661975750538:execution:stale-flags-cleanup:0301478b-1237-456f-95d0-4f3eee14894d
