@@ -27,6 +27,7 @@
     "qa:agent": "echo \"Follow docs/qa-agent.md and write a canvas under ~/.cursor/projects/Users-lucamezzalira-Documents-tinybird/canvases/qa-run-<stamp>.canvas.tsx\"",
     "typecheck": "pnpm -r run typecheck",
     "test": "pnpm --filter @stale-flags/verdicts test",
+    "test:parity": "pnpm --filter @stale-flags/verdict-parity start",
     "lint:flags": "pnpm --filter @stale-flags/featurevisor lint",
     "test:flags": "pnpm --filter @stale-flags/featurevisor test"
   },

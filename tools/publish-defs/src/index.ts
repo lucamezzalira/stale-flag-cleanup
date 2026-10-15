@@ -82,13 +82,13 @@ export async function loadFlagDefinitions(
 }
 
 async function postRows(rows: FlagDefinitionRow[]): Promise<void> {
-  const host = process.env.TINYBIRD_API_HOST ?? "https://api.tinybird.co";
-  const token =
-    process.env.TINYBIRD_APPEND_TOKEN ?? process.env.TINYBIRD_TOKEN ?? "";
+  const host =
+    process.env.TINYBIRD_API_HOST ?? "https://api.us-east.aws.tinybird.co";
+  const token = process.env.TINYBIRD_DEFS_TOKEN ?? "";
   if (!token) {
     console.log(JSON.stringify(rows, null, 2));
     console.error(
-      "No TINYBIRD_APPEND_TOKEN/TINYBIRD_TOKEN; printed rows only (dry).",
+      "No TINYBIRD_DEFS_TOKEN; printed rows only (dry).",
     );
     return;
   }

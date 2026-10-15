@@ -1,7 +1,11 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendDecisions, loadStore } from "@stale-flags/local-store";
+import {
+  appendDecisions,
+  loadDotEnvOnce,
+  loadStore,
+} from "@stale-flags/local-store";
 import {
   cleanupReport,
   listCandidates,
@@ -184,6 +188,7 @@ async function loadFromLocal(): Promise<{
 }
 
 async function main(): Promise<void> {
+  await loadDotEnvOnce();
   const argv = process.argv.filter((a) => a !== "--");
   const dryRun = argv.includes("--dry-run") || !argv.includes("--full");
   const full = argv.includes("--full");

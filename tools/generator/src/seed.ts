@@ -23,6 +23,43 @@ import { createRng } from "./rng.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
+/** Expand daily aggregates into raw events and ingest (MV fills flag_daily_activity). */
+async function ingestActivityAsEvaluations(
+  activity: DailyActivity[],
+): Promise<number> {
+  const batch: object[] = [];
+  let total = 0;
+  const flush = async () => {
+    if (batch.length === 0) return;
+    await ingestToTinybird("flag_evaluations", batch);
+    total += batch.length;
+    batch.length = 0;
+  };
+  for (const row of activity) {
+    const n = Math.max(0, Math.floor(Number(row.event_count) || 0));
+    if (n === 0) continue;
+    const day = String(row.day);
+    const tsBase = `${day}T12:00:00Z`;
+    for (let i = 0; i < n; i++) {
+      batch.push({
+        timestamp: tsBase,
+        flag_key: row.flag_key,
+        outcome: row.outcome,
+        variation: row.variation ?? "",
+        blocked_by: "",
+        app: row.app,
+        build_id: row.build_id,
+        datafile_revision: "",
+        user_hash: `seed_${row.flag_key}_${i}`,
+        session_id: `seed_sess_${row.flag_key}_${i}`,
+      });
+      if (batch.length >= 2000) await flush();
+    }
+  }
+  await flush();
+  return total;
+}
+
 async function loadFlagDefinitions(capturedAt: string): Promise<FlagDefinition[]> {
   const featuresDir = path.join(root, "featurevisor/features");
   const files = (await readdir(featuresDir)).filter((f) => f.endsWith(".yml"));
@@ -316,11 +353,15 @@ async function main(): Promise<void> {
   // Wipe Tinybird Cloud tables so re-seed never stacks history or leftover PRs
   await truncateTinybirdDatasources([...DEMO_TINYBIRD_TABLES]);
 
-  // Mirror into Tinybird (daily activity only; do not also ingest flag_evaluations
-  // or the MV would double-count into flag_daily_activity).
+  // Mirror into Tinybird with scoped tokens (PRD-10). flag_daily_activity has no
+  // APPEND token: expand aggregates into flag_evaluations so the MV fills it.
   await ingestToTinybird("flag_definitions", definitions);
   await ingestToTinybird("build_adoption", adoption);
-  await ingestToTinybird("flag_daily_activity", activity);
+  console.log(
+    `Expanding ${activity.length} daily activity rows into flag_evaluations…`,
+  );
+  const nEval = await ingestActivityAsEvaluations(activity);
+  console.log(`Ingested ${nEval} flag_evaluations (MV populates flag_daily_activity)`);
 
   const store = { definitions, activity, adoption };
   const report = cleanupReport(store, { window_days: days });

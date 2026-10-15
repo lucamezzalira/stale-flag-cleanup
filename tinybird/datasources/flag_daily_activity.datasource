@@ -1,4 +1,7 @@
-TOKEN append_events APPEND
+DESCRIPTION >
+    Aggregated daily counts. No APPEND token: only the materialised view
+    `flag_daily_activity_mv` writes here. Sorting key leads with `flag_key`
+    because every safety pipe filters by flag first.
 
 SCHEMA >
     `day` Date `json:$.day`,
@@ -10,4 +13,7 @@ SCHEMA >
     `event_count` UInt64 `json:$.event_count`
 
 ENGINE "SummingMergeTree"
-ENGINE_SORTING_KEY "day, flag_key, app, build_id, outcome, variation"
+ENGINE_SORTING_KEY "flag_key, day, app, build_id, outcome, variation"
+
+FORWARD_QUERY >
+    SELECT *

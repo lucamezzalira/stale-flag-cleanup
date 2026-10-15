@@ -1,38 +1,69 @@
 # Tinybird project
 
-Datasources and pipes matching PRD-02. Deploy with the Tinybird CLI (`tb`) against your workspace.
+Datasources and pipes matching PRD-02 / PRD-10. Deploy with the Tinybird CLI (`tb`)
+against your workspace.
 
-Local development of the PoC uses `packages/verdicts` + `.local-data` seeded by `pnpm seed`, which implements the same ordered safety rules. When a Tinybird token is present, the generator also posts to these datasources.
+Local development uses `packages/verdicts` + `.local-data` seeded by `pnpm seed`, which
+implements the same ordered safety rules. When scoped tokens are present, the generator
+also posts to Tinybird.
 
 ## Deploy sketch
 
 ```bash
 cd tinybird
 tb login
-tb deploy
+tb --cloud deploy --wait
+tb --cloud --show-tokens token ls
 ```
 
-## Tokens (two roles)
+## Tokens (scoped writers)
 
-| Env var | Protocol | Scope | Used by |
-|---|---|---|---|
-| `TINYBIRD_TOKEN` | REST | Read pipes the agent needs (`flag_candidates`, `cleanup_report`, `flag_safety_check`) plus any append scopes you already use for ingest | Scout, surgeon harness re-verify |
-| `TINYBIRD_APPEND_TOKEN` | REST Events API | Append to datasources / decision log | Seed, publish-defs, decision append |
-| `TINYBIRD_MCP_TOKEN` | MCP (`https://mcp.tinybird.co?token=…&host=…`) | **READ only** on `flag_safety_check` and `cleanup_report` (resource-scoped static token / JWT). Do **not** reuse `TINYBIRD_TOKEN`. | Surgeon evidence Converse call; humans in editors |
+Resource-scoped `TOKEN <name> APPEND|READ` declarations create these static tokens on
+deploy. Copy values into `.env` / CI / Secrets Manager. **Never** put write tokens for
+definitions, adoption, or decisions in the browser bundle.
 
-Resource-scoped MCP evidence token is declared in the pipes as `TOKEN surgeon_mcp_evidence READ` on `flag_safety_check.pipe` and `cleanup_report.pipe`. After `tb --cloud deploy`, copy that token into `.env` as `TINYBIRD_MCP_TOKEN` (`tb --cloud --show-tokens token ls`) and run `pnpm infra:secrets` so Secrets Manager `stale-flags/agent` has the key for the surgeon Fargate task only.
+| Token name | Env var | Can append / read | Used by | Where it lives |
+|---|---|---|---|---|
+| `browser_events` | `TINYBIRD_BROWSER_EVENTS_TOKEN` / `VITE_TINYBIRD_BROWSER_EVENTS_TOKEN` | APPEND `flag_evaluations`, `session_beacons` | Web app | Public shop bundle (by design) |
+| `defs_publisher` | `TINYBIRD_DEFS_TOKEN` | APPEND `flag_definitions` | `tools/publish-defs` | GitHub Actions secret |
+| `adoption_writer` | `TINYBIRD_ADOPTION_TOKEN` | APPEND `build_adoption` | Generator seed | Local `.env` (CI if used) |
+| `decision_writer` | `TINYBIRD_DECISION_TOKEN` | APPEND `cleanup_decision_log` | Scout + surgeon | Secrets Manager `stale-flags/agent` |
+| `endpoint_read` | `TINYBIRD_TOKEN` | READ pipes | Scout + surgeon harness | Secrets Manager |
+| `surgeon_mcp_evidence` | `TINYBIRD_MCP_TOKEN` | READ `flag_safety_check`, `cleanup_report` | Surgeon evidence Converse | Secrets Manager (surgeon only) |
+| (workspace admin) | `TINYBIRD_ADMIN_TOKEN` or `.tinyb` | TRUNCATE / SQL admin | `pnpm seed` wipe before ingest | Local `.env` / GHA secret (parity CI only) |
+
+`flag_daily_activity` has **no** APPEND token. Only the materialised view
+`flag_daily_activity_mv` writes to it. Seed expands daily aggregates into
+`flag_evaluations` so the MV repopulates activity.
+
+After changing token declarations, rotate any retired token (for example the old
+`append_events`) with `tb --cloud token rm <name>` so leaked values stop working.
 
 ### Decision log
 
-`cleanup_decision_log` records scout plans and surgeon outcomes (including gate failures such
-as `diff_substance`). Append with `TINYBIRD_APPEND_TOKEN`. Scout writes planned rows; the
-surgeon writes `safe_to_remove` on PR open or `failed` when a gate aborts before `ensurePr`.
+`cleanup_decision_log` records scout plans and surgeon outcomes (including gate failures
+such as `diff_substance`). Append with `TINYBIRD_DECISION_TOKEN` only.
 
-`flag_safety_check` takes query param `key` (the flag key). Activity nodes must qualify `flag_daily_activity.flag_key` (table alias). Selecting `{{ String(key) }} AS flag_key` next to an unqualified `WHERE flag_key = …` makes ClickHouse bind WHERE to the SELECT alias, so the filter always matches and event counts become workspace-wide.
+`flag_safety_check` takes query param `key` (the flag key). Activity nodes must qualify
+`flag_daily_activity.flag_key` (table alias). Selecting `{{ String(key) }} AS flag_key`
+next to an unqualified `WHERE flag_key = …` makes ClickHouse bind WHERE to the SELECT
+alias, so the filter always matches and event counts become workspace-wide.
 
-## Verdict cascade (PRD-08)
+### Sorting key
 
-Order in `flag_safety_check` / `cleanup_report` `multiIf` (and `packages/verdicts`):
+`flag_daily_activity` uses `ENGINE_SORTING_KEY "flag_key, day, app, build_id, outcome,
+variation"` because every safety query filters by `flag_key` first.
+
+## Verdict cascade (authoritative copy)
+
+**Authoritative:** `tinybird/pipes/flag_safety_check.pipe` (and `cleanup_report.pipe`,
+which adds the “not in definitions” rule for the full matrix).
+
+**Mirror:** `packages/verdicts` for local/offline scout and tests. CI
+`verdict-parity` fails if pipe and TypeScript disagree on `verdict`, `route`, `reason`,
+or `collapse_direction`.
+
+Order in `multiIf` / TypeScript:
 
 1. Missing definition → `blocked`
 2. Parent-gated, zero evaluations → `inconclusive`
@@ -49,7 +80,3 @@ Order in `flag_safety_check` / `cleanup_report` `multiIf` (and `packages/verdict
 
 Fraction in `[0, 1]`: sum of each evaluating build's `session_share` on the **most recent**
 `build_adoption` snapshot date (not `max` across the window). A value above 1 is a bug.
-
-**Pitfalls:** Lifecycle markers made flags eligible before live traffic was checked.
-PR #11's evidence narrative misreported a summed metric as a percentage. Metrics exposed to
-models must mean what their names say.

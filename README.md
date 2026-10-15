@@ -3,11 +3,10 @@
 Background agent removes stale [Featurevisor](https://featurevisor.com) flags only after [Tinybird](https://www.tinybird.co) evidence says it is safe. Verdicts are ordered rules (SQL pipes in `tinybird/`, TypeScript mirror in `packages/verdicts`). Scout schedules. Surgeon collapses code and opens PRs into `demo`. Refusals are intentional.
 
 All telemetry that drives scout/surgeon decisions is **synthetic** (`tools/generator` →
-`flag_daily_activity`). The CloudFront shop build currently ships with empty
-`VITE_TINYBIRD_API_HOST` / `VITE_TINYBIRD_APPEND_TOKEN`, so browser evaluations do **not**
-reach Tinybird (`flag_evaluations` stays empty). FlagCallout text like `off · evaluated`
-means the SDK ran locally and returned false; it is not a Tinybird event. Rebuild the shop
-with those Vite env vars set if you want live streaming.
+`flag_evaluations` → MV → `flag_daily_activity`). The CloudFront shop may ship
+`VITE_TINYBIRD_BROWSER_EVENTS_TOKEN` (scoped to evaluations + beacons only). FlagCallout
+text like `off · evaluated` means the SDK ran locally; live streaming needs those Vite
+env vars set at build time.
 
 Live demo (us-east-1):
 
@@ -219,12 +218,12 @@ sequenceDiagram
 | Model | n/a | Sonnet 4.5 Converse (edit without tools; evidence with MCP tools) |
 | QA | Ad hoc | Production-bar playbook + new-flag E2E |
 
-Refusals stay. Safe removals are whatever Tinybird marks safe. Current fixtures (PRD-08):
-`listing_outlet_banner` (abandoned / delete_gated), `checkout_secure_seal` (settled /
-keep_gated), `nav_winter_ribbon` (deprecated but live minority → **blocked**). Earlier
-pairs: `catalog_clearance_rail` / `checkout_trust_badges` (#12), `size_guide_panel` /
-`search_typo_suggest` (#11), `loyalty_stamp_banner` / `express_pay_hint` (#9),
-`promo_banner_2025` / `one_click_buy` (#5/#6).
+Refusals stay. Safe removals are whatever Tinybird marks safe. Current seed (no
+`safe_to_remove` fixtures): `wishlist` (+ children, descendants / parent-gated),
+`shipping_estimator` (mid-ramp), `search_ranking_v2` (thin), `checkout_redesign` and
+`nav_winter_ribbon` (live minority; ribbon is also deprecated). Earlier removed pairs:
+`listing_outlet_banner` / `checkout_secure_seal` (#14), `catalog_clearance_rail` /
+`checkout_trust_badges` (#12), `promo_banner_2025` / `one_click_buy` (#5/#6).
 
 ### Parts in this repo
 
@@ -244,58 +243,124 @@ pairs: `catalog_clearance_rail` / `checkout_trust_badges` (#12), `size_guide_pan
 | `docs/handoff-mcp-for-claude.md` | Protocol handoff for article / Claude |
 | `tools/reset` | Reset `demo`, truncate Tinybird, reseed |
 | `infra/` | CDK stack (web, datafiles, SFN + Fargate, scheduler, OIDC role) |
-| `.github/workflows/publish-flags.yml` | Push to `main`/`demo` → S3 + CloudFront |
+| `.github/workflows/publish-flags.yml` | Push to `demo` only → S3 + CloudFront |
 | `docs/qa-agent.md` | Manual QA agent playbook |
 
-## Prerequisites
+## Run it yourself
 
-- Node.js >= 24, pnpm 10+
-- Tinybird tokens for cloud path; AWS us-east-1 for CDN + Step Functions/ECS + Bedrock
-- GitHub token with PR scope (Secrets Manager via `pnpm infra:secrets`)
-- Bedrock model access for Sonnet 4.5 Converse in us-east-1
+Reproduce the PoC end to end. Evidence pipes deploy with the Tinybird CLI; the agent host is
+ECS Fargate under Step Functions (not CodeBuild). More infra detail: [`infra/README.md`](infra/README.md).
+Tinybird token notes: [`tinybird/README.md`](tinybird/README.md).
 
-Copy `.env.example` to `.env` and adjust. Infra details: [`infra/README.md`](infra/README.md).
+### Prerequisites
 
-## Quickstart (local)
+| Need | Why |
+|---|---|
+| Node.js ≥ 24, pnpm 10+ | Monorepo install and agents |
+| [Tinybird CLI](https://www.tinybird.co/docs/get-started/quick-start) (`tb`) + a workspace | Datasources, pipes, Events API |
+| AWS account in **us-east-1** with CDK bootstrap rights, Docker, and **Bedrock** access to Claude Sonnet 4.5 | CloudFront shop/datafiles, Step Functions, Fargate scout/surgeon |
+| GitHub personal access token with `repo` (PR create/push) | Surgeon opens PRs into `demo` |
+| AWS CLI configured (`aws sts get-caller-identity` works) | Deploy and `infra:agent-run` |
+
+Optional for a live shop that posts evaluations: set `VITE_TINYBIRD_API_HOST` and
+`VITE_TINYBIRD_BROWSER_EVENTS_TOKEN` before `pnpm infra:sync`. That token can only append
+to `flag_evaluations` and `session_beacons` (see [`tinybird/README.md`](tinybird/README.md)).
+
+### Permissions
+
+| Surface | Rule |
+|---|---|
+| Agent `GITHUB_TOKEN` | Fine-grained PAT on this repo only: Contents write + Pull requests write. No admin. |
+| Branch protection | `main` and `demo` require a PR + one approving review; force-push and deletion blocked; the agent token cannot bypass |
+| Publishing | Only **`demo`** runs `publish-flags.yml` and may assume `stale-flags-gha-publish` (OIDC `sub` pinned to `ref:refs/heads/demo`) |
+| Agent merge | The agent opens PRs into `demo`; it never merges. Humans approve and merge |
+
+### Cloud path (ordered)
 
 ```bash
+git clone https://github.com/lucamezzalira/stale-flag-cleanup.git
+cd stale-flag-cleanup
 pnpm install
-pnpm datafile:build
-pnpm datafile:serve   # terminal 1
-pnpm seed             # terminal 2 — 90-day synthetic history
-pnpm publish-defs
-pnpm report
+pnpm --filter "./packages/**" run build   # workspace dist/ needed by seed + agents
+cp .env.example .env
+```
+
+1. **Log in to Tinybird and deploy the project**
+
+```bash
+tb login
+cd tinybird && tb --cloud deploy --wait && cd ..
+```
+
+Use the region host that matches your workspace (this PoC uses
+`https://api.us-east.aws.tinybird.co`). Set `TINYBIRD_API_HOST` in `.env` to that host.
+
+2. **Copy scoped Tinybird tokens into `.env`**
+
+After deploy, list tokens and fill every writer (do not reuse one value for all):
+
+```bash
+tb --cloud --show-tokens token ls
+```
+
+| Env var | Token name |
+|---|---|
+| `TINYBIRD_TOKEN` | `endpoint_read` |
+| `TINYBIRD_BROWSER_EVENTS_TOKEN` (+ `VITE_…`) | `browser_events` |
+| `TINYBIRD_DEFS_TOKEN` | `defs_publisher` |
+| `TINYBIRD_ADOPTION_TOKEN` | `adoption_writer` |
+| `TINYBIRD_DECISION_TOKEN` | `decision_writer` |
+| `TINYBIRD_MCP_TOKEN` | `surgeon_mcp_evidence` |
+
+Also set `GITHUB_TOKEN` (and optionally `GITHUB_REPO` / `DEMO_BRANCH=demo`) in `.env`.
+
+3. **Push secrets, then deploy AWS**
+
+```bash
+pnpm infra:secrets                 # Writes Secrets Manager stale-flags/agent from .env
+pnpm infra:bootstrap               # Once per account/region
+pnpm infra:deploy                  # Needs Docker; builds scout + surgeon images
+pnpm infra:sync                    # Shop SPA + Featurevisor datafile → S3/CloudFront
+```
+
+4. **Seed synthetic history and dry-run scout**
+
+```bash
+pnpm seed
 SCOUT_SOURCE=tinybird pnpm agent:scout -- --dry-run
 ```
 
-With removable fixtures present you should see independently `safe_to_remove` leaves (latest
-pair was `size_guide_panel` + `search_typo_suggest`) plus refusals for wishlist / shipping /
-`search_ranking_v2` / `checkout_redesign`. Scout logs `source=tinybird-rest`.
+You should see `source=tinybird-rest` and a refusal matrix matching the seed: `wishlist`
+(+ children), `shipping_estimator`, `search_ranking_v2`, `checkout_redesign`,
+`nav_winter_ribbon`. Proposed surgeon actions stay empty until you add a
+`safe_to_remove` fixture. Tokens come from `.env` (scout loads it). If a pipe looks empty
+right after seed, wait a few seconds and re-run scout (Events API ingest lag). To run the
+full Fargate loop:
 
 ```bash
+pnpm infra:agent-run               # Prints Step Functions executionArn
+```
+
+Then follow [`docs/qa-agent.md`](docs/qa-agent.md): merge the agent PR into `demo`, publish
+(GHA or `pnpm infra:sync`). Set GitHub Actions secret `AWS_GHA_PUBLISH_ROLE_ARN` to stack
+output `GitHubPublishRoleArn` if you want merge-triggered publish.
+
+### Local-only (no AWS)
+
+```bash
+pnpm install
+pnpm --filter "./packages/**" run build
+cp .env.example .env               # Fill Tinybird tokens if you want cloud pipes
+pnpm datafile:build
+pnpm datafile:serve                # Terminal 1
+pnpm seed && pnpm publish-defs     # Terminal 2
+SCOUT_SOURCE=tinybird pnpm agent:scout -- --dry-run
 export VITE_DATAFILE_URL=http://127.0.0.1:4099/production/featurevisor-all.json
 pnpm dev
 ```
 
-## AWS demo loop
-
-```bash
-pnpm infra:deploy
-pnpm infra:secrets
-pnpm infra:sync
-pnpm infra:agent-run          # Step Functions StartExecution; capture executionArn
-# Follow docs/qa-agent.md → canvas report → merge PRs into demo
-# If publish-flags GHA is not wired, run: pnpm infra:sync
-```
-
-Set GitHub secret `AWS_GHA_PUBLISH_ROLE_ARN` to stack output `GitHubPublishRoleArn` for automated publish after merge.
-
-## MCP (Tinybird)
-
-People and the surgeon **evidence** model use Tinybird MCP (`https://mcp.tinybird.co`).
-Create a resource-scoped static token with READ on `flag_safety_check` and `cleanup_report`
-only; put it in `TINYBIRD_MCP_TOKEN` (wired into `stale-flags/agent` for the surgeon task).
-Scout and harness re-verify use `TINYBIRD_TOKEN` over REST, not MCP.
+Without Tinybird tokens, `pnpm seed` still writes `.local-data/` and local verdicts work;
+cloud scout/surgeon need the tokens above. Protocol table is under **Protocol rule** above.
 
 ## Environment variables
 
@@ -304,9 +369,12 @@ See `.env.example`. Important ones:
 | Var | Purpose |
 |---|---|
 | `VITE_DATAFILE_URL` | Remote Featurevisor datafile URL |
-| `TINYBIRD_TOKEN` | REST for scout + surgeon harness |
+| `TINYBIRD_TOKEN` | REST read for scout + surgeon harness |
 | `TINYBIRD_MCP_TOKEN` | Surgeon evidence MCP (READ on two pipes) |
-| `TINYBIRD_APPEND_TOKEN` | Event / decision log ingest |
+| `TINYBIRD_BROWSER_EVENTS_TOKEN` | Browser APPEND (evaluations + beacons) |
+| `TINYBIRD_DEFS_TOKEN` | publish-defs APPEND |
+| `TINYBIRD_ADOPTION_TOKEN` | Seed APPEND to `build_adoption` |
+| `TINYBIRD_DECISION_TOKEN` | Scout/surgeon APPEND to decision log |
 | `SCOUT_SOURCE` | `tinybird` for cloud scout (REST); omit/local for `.local-data` |
 | `BEDROCK_MODEL_ID` | Default Sonnet 4.5 inference profile |
 | `BEDROCK_DISABLED` | `1` forces heuristic surgeon edits |
