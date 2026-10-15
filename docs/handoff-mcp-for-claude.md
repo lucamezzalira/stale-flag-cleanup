@@ -59,22 +59,30 @@ E2E with new fixtures (this handoff’s demo): `4541b483-55ad-4335-8300-dcaffbea
 - Not AgentCore Gateway (out of scope).
 - Not a path for the editing model mid-edit (editing Converse has zero tools).
 
-## Latest E2E fixtures (do not revive loyalty/express in the article)
+## Fixtures for the article
 
-| Flag | Collapse | BEFORE | AFTER |
-|---|---|---|---|
-| `size_guide_panel` | `delete_gated_branch` | Listing Size guide panel | Panel gone |
-| `search_typo_suggest` | `keep_gated_branch` | Search “Did you mean…” + flag callout | Chip kept, `search_typo_suggest` plumbing gone |
+Current seed is **refusal-only** (no `safe_to_remove`). Cite the refusal matrix
+(`wishlist` nest, mid-ramp shipping, thin search, sticky `checkout_redesign`,
+deprecated-but-live `nav_winter_ribbon`).
 
-Captures: `docs/captures/article-2026-10/16`–`20`. Shots 13–14 (Tinybird Cloud UI / SFN graph) skipped on purpose.
+Historical E2E pairs (already merged; do not revive as live fixtures):
+
+| Flag | Collapse | PR |
+|---|---|---|
+| `size_guide_panel` / `search_typo_suggest` | delete_gated / keep_gated | #11 |
+| `listing_outlet_banner` / `checkout_secure_seal` | delete_gated / keep_gated | #14 |
+
+Captures: `docs/captures/article-2026-10/`. Token model: PRD-10 scoped writers
+(`browser_events`, `defs_publisher`, `adoption_writer`, `decision_writer`); see
+`tinybird/README.md`.
 
 ## Code pointers
 
 - Scout REST: `agent/scout/src/index.ts`
 - Surgeon re-verify + MCP evidence Converse: `agent/surgeon/src/index.ts`
-- Fargate env: `infra/lib/agent-orchestrator.ts` (`SCOUT_SOURCE=tinybird`, surgeon secrets include `TINYBIRD_MCP_TOKEN`)
-- Pipe tokens: `tinybird/pipes/flag_safety_check.pipe`, `cleanup_report.pipe`
-- Product rule: `prds/PRD-07-protocol-alignment.md`
+- Fargate env: `infra/lib/agent-orchestrator.ts` (`SCOUT_SOURCE=tinybird`; surgeon has `TINYBIRD_MCP_TOKEN` + `TINYBIRD_DECISION_TOKEN`)
+- Pipe / datasource tokens: `tinybird/README.md` (PRD-10 scopes)
+- Product rule: `prds/PRD-07-protocol-alignment.md` (tokens superseded by PRD-10)
 
 ## Suggested article framing for Claude
 

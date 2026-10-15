@@ -26,7 +26,7 @@ Rule after this change:
 2. **Surgeon harness: REST re-verify** before each edit and in dry-run. Abort all-or-nothing PR on drift. Decision section from REST only.
 3. **Surgeon model: read-only Tinybird MCP** for evidence narrative after gates, before `ensurePr`. Separate Converse with `tinybird_call_endpoint` allowlisted to `flag_safety_check` + `cleanup_report`. Editing Converse stays tool-free. `TINYBIRD_MCP_TOKEN` (not `TINYBIRD_TOKEN`) on surgeon task only.
 4. **Observability** log lines for REST / MCP / summary (see `docs/qa-agent.md`).
-5. **Docs** protocol rule, caller table, ECS Fargate host (not CodeBuild), two-token Tinybird README.
+5. **Docs** protocol rule, caller table, ECS Fargate host (not CodeBuild), Tinybird token README (two-token sketch; **superseded by PRD-10** scoped writers).
 
 ## Out of scope
 
