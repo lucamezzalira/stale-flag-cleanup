@@ -10,6 +10,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendDecisions } from "@stale-flags/local-store";
 import {
+  checkDiffSubstance,
+  GATES_LINE,
+} from "./diff-substance.js";
+import {
   BedrockRuntimeClient,
   ConverseCommand,
   type ContentBlock,
@@ -173,7 +177,7 @@ function buildPrBody(opts: {
 }): string {
   const gates =
     opts.gatesLine ??
-    "tsc, vite build, featurevisor lint/test, flag-key grep, security diff allowlist";
+    GATES_LINE;
   const decision = decisionSection(opts.runIdValue, opts.decisions, gates);
   const stamp = new Date().toISOString();
   const footer =
@@ -262,6 +266,31 @@ function listDirtyPaths(): string[] {
     .map((s) => s.trim())
     .filter(Boolean);
   return [...new Set(lines)];
+}
+
+async function recordDiffSubstanceFailure(
+  payloads: Payload[],
+  failingFlag: string,
+  detail: string,
+): Promise<void> {
+  console.log(`gate=diff_substance status=fail flag=${failingFlag}`);
+  await appendDecisions(
+    payloads.map((p) => ({
+      decided_at: new Date().toISOString(),
+      run_id: p.run_id,
+      flag_key: p.flag_key,
+      verdict: "failed",
+      route: p.route ?? "none",
+      reason: `diff_substance gate failed for ${failingFlag}: ${detail}`,
+      evidence: JSON.stringify({
+        gate: "diff_substance",
+        failing_flag: failingFlag,
+        detail,
+      }),
+      pr_url: "",
+      datafile_revision: p.datafile_revision ?? "",
+    })),
+  );
 }
 
 function securityCheck(changed: string[]): { ok: boolean; detail: string } {
@@ -1216,6 +1245,22 @@ async function runPlanMode(plan: PlanFile): Promise<void> {
       );
     }
 
+    const substance = checkDiffSubstance(
+      payloads.map((p) => p.flag_key),
+      dirty,
+    );
+    if (!substance.ok) {
+      await recordDiffSubstanceFailure(
+        payloads,
+        substance.flag,
+        substance.detail,
+      );
+      rewind();
+      throw new Error(
+        `diff_substance gate failed for ${substance.flag}: ${substance.detail}`,
+      );
+    }
+
     run("git", [
       "config",
       "user.email",
@@ -1251,6 +1296,7 @@ Removed ${payloads.length} independently \`safe_to_remove\` flag(s) in one all-o
       decisions,
       evidenceNarrative: evidence.narrative,
       mcpStatus: evidence.status,
+      gatesLine: GATES_LINE,
     });
     mkdirSync(path.join(root, ".local-data"), { recursive: true });
     writeFileSync(path.join(root, `.local-data/pr-${plan.run_id}.md`), body);
@@ -1388,6 +1434,18 @@ async function runSingleFlagMode(): Promise<void> {
     if (dirty.length === 0) {
       rewind();
       throw new Error("No staged changes after successful gates");
+    }
+    const substance = checkDiffSubstance([payload.flag_key], dirty);
+    if (!substance.ok) {
+      await recordDiffSubstanceFailure(
+        [payload],
+        substance.flag,
+        substance.detail,
+      );
+      rewind();
+      throw new Error(
+        `diff_substance gate failed for ${substance.flag}: ${substance.detail}`,
+      );
     }
     run("git", [
       "config",

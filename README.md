@@ -2,7 +2,12 @@
 
 Background agent removes stale [Featurevisor](https://featurevisor.com) flags only after [Tinybird](https://www.tinybird.co) evidence says it is safe. Verdicts are ordered rules (SQL pipes in `tinybird/`, TypeScript mirror in `packages/verdicts`). Scout schedules. Surgeon collapses code and opens PRs into `demo`. Refusals are intentional.
 
-All telemetry in this repository is **synthetic** (`tools/generator`).
+All telemetry that drives scout/surgeon decisions is **synthetic** (`tools/generator` →
+`flag_daily_activity`). The CloudFront shop build currently ships with empty
+`VITE_TINYBIRD_API_HOST` / `VITE_TINYBIRD_APPEND_TOKEN`, so browser evaluations do **not**
+reach Tinybird (`flag_evaluations` stays empty). FlagCallout text like `off · evaluated`
+means the SDK ran locally and returned false; it is not a Tinybird event. Rebuild the shop
+with those Vite env vars set if you want live streaming.
 
 Live demo (us-east-1):
 
@@ -21,7 +26,7 @@ flowchart TB
     CDN[Datafile CDN]
     FV -->|build datafile| CDN
     CDN -->|datafileUrl| WEB
-    WEB -->|evaluations + beacons| TB
+    WEB -.->|evaluations when Vite Tinybird env set| TB
   end
 
   subgraph evidence [Evidence layer]
