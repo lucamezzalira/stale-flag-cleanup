@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendDecisions } from "@stale-flags/local-store";
+import { appendDecisions, loadDotEnvOnce } from "@stale-flags/local-store";
 import {
   checkDiffSubstance,
   GATES_LINE,
@@ -1499,6 +1499,7 @@ async function runSingleFlagMode(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  await loadDotEnvOnce();
   const plan = loadPlan();
   if (plan) {
     await runPlanMode(plan);

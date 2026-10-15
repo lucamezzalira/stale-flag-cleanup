@@ -1,4 +1,4 @@
-TOKEN append_events APPEND
+TOKEN decision_writer APPEND
 
 SCHEMA >
     `decided_at` DateTime64(3) `json:$.decided_at`,

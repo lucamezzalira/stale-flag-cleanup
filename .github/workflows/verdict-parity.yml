@@ -1,0 +1,44 @@
+name: verdict-parity
+
+on:
+  pull_request:
+    paths:
+      - "tinybird/**"
+      - "packages/verdicts/**"
+      - "tools/verdict-parity/**"
+      - "tools/generator/**"
+      - ".github/workflows/verdict-parity.yml"
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Build packages
+        run: pnpm --filter "./packages/**" run build
+      - name: Seed + parity
+        env:
+          TINYBIRD_API_HOST: ${{ secrets.TINYBIRD_API_HOST }}
+          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_TOKEN }}
+          TINYBIRD_BROWSER_EVENTS_TOKEN: ${{ secrets.TINYBIRD_BROWSER_EVENTS_TOKEN }}
+          TINYBIRD_DEFS_TOKEN: ${{ secrets.TINYBIRD_DEFS_TOKEN }}
+          TINYBIRD_ADOPTION_TOKEN: ${{ secrets.TINYBIRD_ADOPTION_TOKEN }}
+          TINYBIRD_DECISION_TOKEN: ${{ secrets.TINYBIRD_DECISION_TOKEN }}
+          SEED: "42"
+          SEED_DAYS: "90"
+        run: |
+          if [[ -z "${TINYBIRD_TOKEN}" ]]; then
+            echo "TINYBIRD_TOKEN secret missing; skipping cloud parity"
+            exit 0
+          fi
+          pnpm seed
+          # Events API → MV lag
+          sleep 15
+          pnpm --filter @stale-flags/verdict-parity start

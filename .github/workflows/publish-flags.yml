@@ -2,7 +2,9 @@ name: publish-flags
 
 on:
   push:
-    branches: [main, demo]
+    # Single publishing branch (PRD-10): demo is the agent target and the
+    # only branch that may overwrite the shop / production datafile.
+    branches: [demo]
     paths:
       - "featurevisor/**"
       - "apps/web/**"
@@ -77,7 +79,7 @@ jobs:
         env:
           VITE_DATAFILE_URL: https://${{ steps.stack.outputs.data_cf }}/featurevisor/production/featurevisor-all.json
           VITE_TINYBIRD_API_HOST: ${{ secrets.TINYBIRD_API_HOST }}
-          VITE_TINYBIRD_APPEND_TOKEN: ${{ secrets.TINYBIRD_APPEND_TOKEN }}
+          VITE_TINYBIRD_BROWSER_EVENTS_TOKEN: ${{ secrets.TINYBIRD_BROWSER_EVENTS_TOKEN }}
         run: pnpm --filter @stale-flags/web build
 
       - name: Upload web
@@ -93,11 +95,10 @@ jobs:
       - name: Publish flag definitions to Tinybird
         env:
           TINYBIRD_API_HOST: ${{ secrets.TINYBIRD_API_HOST }}
-          TINYBIRD_APPEND_TOKEN: ${{ secrets.TINYBIRD_APPEND_TOKEN }}
-          TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_TOKEN }}
+          TINYBIRD_DEFS_TOKEN: ${{ secrets.TINYBIRD_DEFS_TOKEN }}
         run: |
-          if [[ -z "${TINYBIRD_APPEND_TOKEN}" ]]; then
-            echo "TINYBIRD_APPEND_TOKEN secret not set; skipping publish-defs"
+          if [[ -z "${TINYBIRD_DEFS_TOKEN}" ]]; then
+            echo "TINYBIRD_DEFS_TOKEN secret not set; skipping publish-defs"
             exit 0
           fi
           pnpm publish-defs

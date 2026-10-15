@@ -4,10 +4,14 @@ import { Construct } from "constructs";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as ecrAssets from "aws-cdk-lib/aws-ecr-assets";
+import * as events from "aws-cdk-lib/aws-events";
+import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
+import * as sns from "aws-cdk-lib/aws-sns";
+import * as snsSubscriptions from "aws-cdk-lib/aws-sns-subscriptions";
 import * as sfn from "aws-cdk-lib/aws-stepfunctions";
 import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import * as scheduler from "aws-cdk-lib/aws-scheduler";
@@ -121,9 +125,9 @@ export class AgentOrchestrator extends Construct {
           agentSecrets,
           "TINYBIRD_API_HOST",
         ),
-        TINYBIRD_APPEND_TOKEN: ecs.Secret.fromSecretsManager(
+        TINYBIRD_DECISION_TOKEN: ecs.Secret.fromSecretsManager(
           agentSecrets,
-          "TINYBIRD_APPEND_TOKEN",
+          "TINYBIRD_DECISION_TOKEN",
         ),
         TINYBIRD_TOKEN: ecs.Secret.fromSecretsManager(agentSecrets, "TINYBIRD_TOKEN"),
       },
@@ -171,9 +175,9 @@ export class AgentOrchestrator extends Construct {
           agentSecrets,
           "TINYBIRD_API_HOST",
         ),
-        TINYBIRD_APPEND_TOKEN: ecs.Secret.fromSecretsManager(
+        TINYBIRD_DECISION_TOKEN: ecs.Secret.fromSecretsManager(
           agentSecrets,
-          "TINYBIRD_APPEND_TOKEN",
+          "TINYBIRD_DECISION_TOKEN",
         ),
         TINYBIRD_TOKEN: ecs.Secret.fromSecretsManager(agentSecrets, "TINYBIRD_TOKEN"),
         // Read-only MCP token for evidence narrative (not reused for REST re-verify).
@@ -183,6 +187,9 @@ export class AgentOrchestrator extends Construct {
         ),
       },
     });
+
+    const stateMachineName = "stale-flags-cleanup";
+    const stateMachineArn = `arn:aws:states:${region}:${account}:stateMachine:${stateMachineName}`;
 
     const planKey = sfn.JsonPath.format(
       "{}/plan.json",
@@ -200,6 +207,27 @@ export class AgentOrchestrator extends Construct {
       `s3://${this.resultsBucket.bucketName}/{}/surgeon-result.json`,
       sfn.JsonPath.stringAt("$$.Execution.Name"),
     );
+
+    const alreadyRunning = new sfn.Succeed(this, "AlreadyRunning");
+
+    const listRunning = new tasks.CallAwsService(this, "ListRunningExecutions", {
+      service: "sfn",
+      action: "listExecutions",
+      parameters: {
+        StateMachineArn: sfn.JsonPath.stringAt("$$.StateMachine.Id"),
+        StatusFilter: "RUNNING",
+        MaxResults: 10,
+      },
+      iamResources: [stateMachineArn],
+      resultPath: "$.running",
+    });
+
+    const countRunning = new sfn.Pass(this, "CountRunning", {
+      parameters: {
+        "count.$": "States.ArrayLength($.running.Executions)",
+        "running.$": "$.running",
+      },
+    });
 
     const scout = new tasks.EcsRunTask(this, "Scout", {
       cluster: this.cluster,
@@ -304,7 +332,7 @@ export class AgentOrchestrator extends Construct {
       )
       .otherwise(nothingToDo);
 
-    const definition = scout
+    const scoutChain = scout
       .addCatch(
         new sfn.Fail(this, "ScoutFailed", {
           error: "ScoutFailed",
@@ -316,9 +344,16 @@ export class AgentOrchestrator extends Construct {
       .next(parseScout)
       .next(hasCandidates);
 
+    // RUNNING list always includes this execution; >1 means another is in flight.
+    const overlapGate = listRunning.next(countRunning).next(
+      new sfn.Choice(this, "OverlapCheck")
+        .when(sfn.Condition.numberGreaterThan("$.count", 1), alreadyRunning)
+        .otherwise(scoutChain),
+    );
+
     this.stateMachine = new sfn.StateMachine(this, "StateMachine", {
-      stateMachineName: "stale-flags-cleanup",
-      definitionBody: sfn.DefinitionBody.fromChainable(definition),
+      stateMachineName,
+      definitionBody: sfn.DefinitionBody.fromChainable(overlapGate),
       timeout: cdk.Duration.hours(2),
       tracingEnabled: true,
     });
@@ -348,6 +383,48 @@ export class AgentOrchestrator extends Construct {
           retryAttempts: 0,
         },
       ),
+    });
+
+    // Alert on failed / timed-out / aborted nights (silent success stays quiet).
+    const alertEmail = cdk.Stack.of(this).node.tryGetContext("alertEmail") as
+      | string
+      | undefined;
+    const alertTopic = new sns.Topic(this, "AgentFailureTopic", {
+      topicName: "stale-flags-agent-failures",
+      displayName: "Stale flags agent failures",
+    });
+    if (alertEmail) {
+      alertTopic.addSubscription(
+        new snsSubscriptions.EmailSubscription(alertEmail),
+      );
+    }
+
+    new events.Rule(this, "AgentFailureRule", {
+      description: "Notify when stale-flags-cleanup fails, times out, or aborts",
+      eventPattern: {
+        source: ["aws.states"],
+        detailType: ["Step Functions Execution Status Change"],
+        detail: {
+          status: ["FAILED", "TIMED_OUT", "ABORTED"],
+          stateMachineArn: [this.stateMachine.stateMachineArn],
+        },
+      },
+      targets: [
+        new eventsTargets.SnsTopic(alertTopic, {
+          message: events.RuleTargetInput.fromObject({
+            subject: "stale-flags-cleanup failed",
+            executionArn: events.EventField.fromPath("$.detail.executionArn"),
+            status: events.EventField.fromPath("$.detail.status"),
+            stateMachineArn: events.EventField.fromPath(
+              "$.detail.stateMachineArn",
+            ),
+            name: events.EventField.fromPath("$.detail.name"),
+            stopDate: events.EventField.fromPath("$.detail.stopDate"),
+            error: events.EventField.fromPath("$.detail.error"),
+            cause: events.EventField.fromPath("$.detail.cause"),
+          }),
+        }),
+      ],
     });
   }
 }
