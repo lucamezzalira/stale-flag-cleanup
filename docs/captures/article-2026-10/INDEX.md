@@ -24,12 +24,17 @@ Real browser captures only. Shots 13–14 (Tinybird Cloud UI / AWS SFN graph) sk
 | 18 | Listing AFTER size guide gone | `18-listing-after-size-guide-gone.png` | Live shop post PR #11 |
 | 19 | Search AFTER tip kept | `19-search-after-typo-kept.png` | Live shop post PR #11 |
 | 20 | PR #11 Decision + Evidence (MCP) | `20-pr11-body-decision-evidence.png` | GitHub PR #11 |
+| 21 | PR #14 Files (keep vs delete) | `21-pr14-files-checkout-listing.png` | GitHub PR #14 diffs |
+| 22 | Checkout after seal kept | `22-checkout-after-seal-kept.png` | Live shop post #14 |
+| 23 | Listing winter ribbon still on | `23-listing-after-winter-still-on.png` | Live shop refusal UI |
+| 24 | Datafile keys after publish | `24-datafile-keys-after-publish.json` (+ PNG when available) | CloudFront rev 24 |
 
-## E2E run (new fixtures)
+PRD-08/09 extras: `latest/` and `listing-outlet-investigation.md`.
 
-- Flags: `size_guide_panel` (delete_gated), `search_typo_suggest` (keep_gated)
-- SFN: `4541b483-55ad-4335-8300-dcaffbeaf809`
-- PR: https://github.com/lucamezzalira/stale-flag-cleanup/pull/11 (merged)
+## E2E runs
+
+- PR #11: `size_guide_panel` / `search_typo_suggest` — SFN `4541b483-…`
+- PR #14: `listing_outlet_banner` / `checkout_secure_seal` — SFN `0301478b-…`
 - Shop: https://dj37uarwx2jpn.cloudfront.net/
 - Datafile: https://d1jcup3snfgsrs.cloudfront.net/featurevisor/production/featurevisor-all.json
 

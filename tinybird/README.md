@@ -22,6 +22,12 @@ tb deploy
 
 Resource-scoped MCP evidence token is declared in the pipes as `TOKEN surgeon_mcp_evidence READ` on `flag_safety_check.pipe` and `cleanup_report.pipe`. After `tb --cloud deploy`, copy that token into `.env` as `TINYBIRD_MCP_TOKEN` (`tb --cloud --show-tokens token ls`) and run `pnpm infra:secrets` so Secrets Manager `stale-flags/agent` has the key for the surgeon Fargate task only.
 
+### Decision log
+
+`cleanup_decision_log` records scout plans and surgeon outcomes (including gate failures such
+as `diff_substance`). Append with `TINYBIRD_APPEND_TOKEN`. Scout writes planned rows; the
+surgeon writes `safe_to_remove` on PR open or `failed` when a gate aborts before `ensurePr`.
+
 `flag_safety_check` takes query param `key` (the flag key). Activity nodes must qualify `flag_daily_activity.flag_key` (table alias). Selecting `{{ String(key) }} AS flag_key` next to an unqualified `WHERE flag_key = …` makes ClickHouse bind WHERE to the SELECT alias, so the filter always matches and event counts become workspace-wide.
 
 ## Verdict cascade (PRD-08)

@@ -1,0 +1,16 @@
+{
+  "revision": "24",
+  "feature_keys": [
+    "checkout_redesign",
+    "nav_winter_ribbon",
+    "search_ranking_v2",
+    "shipping_estimator",
+    "wishlist",
+    "wishlist_sharing",
+    "wishlist_sharing_qr"
+  ],
+  "absent": [
+    "listing_outlet_banner",
+    "checkout_secure_seal"
+  ]
+}
