@@ -10,7 +10,6 @@ const PRODUCTS = [
 
 export function SearchPage() {
   const ranking = useFlag("search_ranking_v2");
-  const typo = useFlag("search_typo_suggest");
   const sorted = [...PRODUCTS].sort((a, b) =>
     ranking.enabled ? b.scoreV2 - a.scoreV2 : b.scoreV1 - a.scoreV1,
   );
@@ -27,21 +26,12 @@ export function SearchPage() {
         </div>
       </div>
 
-      {typo.enabled ? (
-        <div className="banner" style={{ marginBottom: "1rem" }}>
-          <div>
-            <strong>Did you mean Classic Tee?</strong>
-            <span>Typo suggest chip for near-miss queries.</span>
-          </div>
+      <div className="banner" style={{ marginBottom: "1rem" }}>
+        <div>
+          <strong>Did you mean Classic Tee?</strong>
+          <span>Typo suggest chip for near-miss queries.</span>
         </div>
-      ) : null}
-      <FlagCallout
-        flagKey="search_typo_suggest"
-        enabled={typo.enabled}
-        variation={typo.variation}
-        outcome={typo.outcome}
-        blockedBy={typo.blockedBy}
-      />
+      </div>
 
       <FlagCallout
         flagKey="search_ranking_v2"
