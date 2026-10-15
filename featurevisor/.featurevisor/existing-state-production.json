@@ -151,6 +151,15 @@
         }
       ],
       "hash": "O3kJYbJqG0"
+    },
+    "listing_outlet_banner": {
+      "traffic": [
+        {
+          "key": "everyone",
+          "percentage": 0
+        }
+      ],
+      "hash": "FjxMbNI7T0"
     }
   }
 }
