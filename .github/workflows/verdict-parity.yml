@@ -24,9 +24,12 @@ jobs:
       - name: Build packages
         run: pnpm --filter "./packages/**" run build
       - name: Seed + parity
+        timeout-minutes: 20
         env:
           TINYBIRD_API_HOST: ${{ secrets.TINYBIRD_API_HOST }}
           TINYBIRD_TOKEN: ${{ secrets.TINYBIRD_TOKEN }}
+          # Workspace admin: truncate before seed (scoped tokens cannot TRUNCATE).
+          TINYBIRD_ADMIN_TOKEN: ${{ secrets.TINYBIRD_ADMIN_TOKEN }}
           TINYBIRD_BROWSER_EVENTS_TOKEN: ${{ secrets.TINYBIRD_BROWSER_EVENTS_TOKEN }}
           TINYBIRD_DEFS_TOKEN: ${{ secrets.TINYBIRD_DEFS_TOKEN }}
           TINYBIRD_ADOPTION_TOKEN: ${{ secrets.TINYBIRD_ADOPTION_TOKEN }}
@@ -34,11 +37,11 @@ jobs:
           SEED: "42"
           SEED_DAYS: "90"
         run: |
-          if [[ -z "${TINYBIRD_TOKEN}" ]]; then
-            echo "TINYBIRD_TOKEN secret missing; skipping cloud parity"
+          if [[ -z "${TINYBIRD_TOKEN}" || -z "${TINYBIRD_ADMIN_TOKEN}" ]]; then
+            echo "TINYBIRD_TOKEN / TINYBIRD_ADMIN_TOKEN secret missing; skipping cloud parity"
             exit 0
           fi
           pnpm seed
           # Events API → MV lag
-          sleep 15
+          sleep 20
           pnpm --filter @stale-flags/verdict-parity start

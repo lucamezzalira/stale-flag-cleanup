@@ -30,6 +30,7 @@ definitions, adoption, or decisions in the browser bundle.
 | `decision_writer` | `TINYBIRD_DECISION_TOKEN` | APPEND `cleanup_decision_log` | Scout + surgeon | Secrets Manager `stale-flags/agent` |
 | `endpoint_read` | `TINYBIRD_TOKEN` | READ pipes | Scout + surgeon harness | Secrets Manager |
 | `surgeon_mcp_evidence` | `TINYBIRD_MCP_TOKEN` | READ `flag_safety_check`, `cleanup_report` | Surgeon evidence Converse | Secrets Manager (surgeon only) |
+| (workspace admin) | `TINYBIRD_ADMIN_TOKEN` or `.tinyb` | TRUNCATE / SQL admin | `pnpm seed` wipe before ingest | Local `.env` / GHA secret (parity CI only) |
 
 `flag_daily_activity` has **no** APPEND token. Only the materialised view
 `flag_daily_activity_mv` writes to it. Seed expands daily aggregates into
