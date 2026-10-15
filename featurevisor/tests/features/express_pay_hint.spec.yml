@@ -1,6 +1,0 @@
-feature: express_pay_hint
-assertions:
-  - description: production everyone on
-    environment: production
-    at: 50
-    expectedToBeEnabled: true
