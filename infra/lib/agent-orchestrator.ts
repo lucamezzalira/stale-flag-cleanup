@@ -68,12 +68,14 @@ export class AgentOrchestrator extends Construct {
       directory: path.join(__dirname, "../.."),
       file: "Dockerfile.scout",
       exclude,
+      platform: ecrAssets.Platform.LINUX_ARM64,
     });
 
     const surgeonImage = new ecrAssets.DockerImageAsset(this, "SurgeonImage", {
       directory: path.join(__dirname, "../.."),
       file: "Dockerfile.surgeon",
       exclude,
+      platform: ecrAssets.Platform.LINUX_ARM64,
     });
 
     const scoutLogs = new logs.LogGroup(this, "ScoutLogs", {

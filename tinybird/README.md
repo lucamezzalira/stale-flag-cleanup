@@ -13,3 +13,5 @@ tb deploy
 ```
 
 Scope endpoint tokens to `flag_candidates`, `flag_safety_check`, and `cleanup_report` for MCP / agent use.
+
+`flag_safety_check` takes query param `key` (the flag key). Do not name it `flag_key`: that collides with the column and turns `WHERE flag_key = …` into a tautology.
