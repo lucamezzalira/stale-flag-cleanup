@@ -3,17 +3,10 @@
 Background agent removes stale [Featurevisor](https://featurevisor.com) flags only after [Tinybird](https://www.tinybird.co) evidence says it is safe. Verdicts are ordered rules (SQL pipes in `tinybird/`, TypeScript mirror in `packages/verdicts`). Scout schedules. Surgeon collapses code and opens PRs into `demo`. Refusals are intentional.
 
 Scout/surgeon decisions use **synthetic** history (`pnpm seed` → `flag_evaluations` → MV →
-`flag_daily_activity`). The CloudFront shop ships `VITE_TINYBIRD_BROWSER_EVENTS_TOKEN`
+`flag_daily_activity`). A deployed shop may bake `VITE_TINYBIRD_BROWSER_EVENTS_TOKEN`
 (scoped `browser_events`: evaluations + beacons only; cannot append definitions or
 decisions). FlagCallout text like `off · evaluated` is the local SDK outcome; it is not
 proof that Tinybird ingested a row.
-
-Live demo (us-east-1):
-
-| Surface | URL |
-|---|---|
-| Shop | https://dj37uarwx2jpn.cloudfront.net |
-| Datafile | https://d1jcup3snfgsrs.cloudfront.net/featurevisor/production/featurevisor-all.json |
 
 ## Architecture (logical)
 
@@ -262,7 +255,7 @@ Tinybird token notes: [`tinybird/README.md`](tinybird/README.md).
 | GitHub personal access token with `repo` (PR create/push) | Surgeon opens PRs into `demo` |
 | AWS CLI configured (`aws sts get-caller-identity` works) | Deploy and `infra:agent-run` |
 
-Optional for a live shop that posts evaluations: set `VITE_TINYBIRD_API_HOST` and
+Optional for a shop that posts evaluations: set `VITE_TINYBIRD_API_HOST` and
 `VITE_TINYBIRD_BROWSER_EVENTS_TOKEN` before `pnpm infra:sync`. That token can only append
 to `flag_evaluations` and `session_beacons` (see [`tinybird/README.md`](tinybird/README.md)).
 
@@ -292,8 +285,7 @@ tb login
 cd tinybird && tb --cloud deploy --wait && cd ..
 ```
 
-Use the region host that matches your workspace (this PoC uses
-`https://api.us-east.aws.tinybird.co`). Set `TINYBIRD_API_HOST` in `.env` to that host.
+Set `TINYBIRD_API_HOST` in `.env` to the API host for your Tinybird workspace region.
 
 2. **Copy scoped Tinybird tokens into `.env`**
 
@@ -342,8 +334,8 @@ pnpm infra:agent-run               # Prints Step Functions executionArn
 ```
 
 Then follow [`docs/qa-agent.md`](docs/qa-agent.md): merge the agent PR into `demo`, publish
-(GHA or `pnpm infra:sync`). Set GitHub Actions secret `AWS_GHA_PUBLISH_ROLE_ARN` to stack
-output `GitHubPublishRoleArn` if you want merge-triggered publish.
+(GHA or `pnpm infra:sync`). Set GitHub Actions secret `AWS_GHA_PUBLISH_ROLE_ARN` to your
+stack’s `GitHubPublishRoleArn` output if you want merge-triggered publish.
 
 ### Local-only (no AWS)
 

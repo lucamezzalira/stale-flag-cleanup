@@ -169,20 +169,8 @@ export async function truncateTinybirdDatasources(
     return;
   }
   for (const name of names) {
-    // Prefer SQL TRUNCATE (admin token). Datasource truncate API needs DATASOURCES:CREATE.
-    const sqlRes = await fetch(`${host.replace(/\/$/, "")}/v0/sql`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: `q=${encodeURIComponent(`TRUNCATE TABLE ${name}`)}`,
-    });
-    if (sqlRes.ok) {
-      console.log(`Truncated Tinybird datasource ${name}`);
-      continue;
-    }
-    const sqlText = await sqlRes.text();
+    // Query API (/v0/sql) only allows SELECT/DESCRIBE. TRUNCATE there always
+    // returns 400 and polluted Tinybird's error log; use the datasource API.
     const res = await fetch(
       `${host.replace(/\/$/, "")}/v0/datasources/${encodeURIComponent(name)}/truncate`,
       {
@@ -192,9 +180,7 @@ export async function truncateTinybirdDatasources(
     );
     const text = await res.text();
     if (!res.ok) {
-      throw new Error(
-        `Tinybird truncate ${name}: sql=${sqlRes.status} ${sqlText}; api=${res.status} ${text}`,
-      );
+      throw new Error(`Tinybird truncate ${name}: ${res.status} ${text}`);
     }
     console.log(`Truncated Tinybird datasource ${name}`);
   }
